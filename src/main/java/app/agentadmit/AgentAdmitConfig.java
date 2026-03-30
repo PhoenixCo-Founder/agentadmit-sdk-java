@@ -52,4 +52,11 @@ public class AgentAdmitConfig {
 
     public String getUserLookupField() { return userLookupField; }
     public void setUserLookupField(String f) { this.userLookupField = f; }
+
+    // Rate limiting
+    private int maxRetries = 3;
+
+    /** Max retries on HTTP 429 before throwing RateLimitError. Default: 3. */
+    public int getMaxRetries() { return maxRetries; }
+    public void setMaxRetries(int maxRetries) { this.maxRetries = maxRetries; }
 }

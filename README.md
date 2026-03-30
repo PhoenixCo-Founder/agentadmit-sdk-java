@@ -53,6 +53,53 @@ The token goes to the human, not the agent. No automated delivery = no prompt in
 
 **In-app AI scopes.** If your app has built-in AI features (analysis, plan generation, photo recognition), do not expose those as agent scopes. The user's AI agent can read the raw data and do the analysis itself. Exposing in-app AI endpoints to agents creates double cost.
 
+## Rate Limiting
+
+The AgentAdmit introspection endpoint enforces rate limits. The Java SDK handles HTTP 429 responses **automatically** with exponential backoff and jitter — no changes needed in your filter or aspect code.
+
+### Retry behavior
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| Initial delay | 1 second | First retry wait |
+| Backoff multiplier | 2× | Doubles each retry |
+| Cap | 30 seconds | Maximum wait per retry |
+| Jitter | 0–500 ms | Random addition to each delay |
+| Max retries | **3** | Configurable |
+
+The SDK also respects the `Retry-After` response header — if present, it overrides the computed backoff delay.
+
+### Configuring max retries
+
+In `application.yml`:
+
+```yaml
+agentadmit:
+  max-retries: 5  # default: 3
+```
+
+### Handling exhausted retries
+
+When all retries are exhausted, `IntrospectionClient.verify()` throws `AgentAdmitException.RateLimitError`:
+
+```java
+try {
+    IntrospectionResult result = introspectionClient.verify(token);
+} catch (AgentAdmitException.RateLimitError e) {
+    response.setStatus(429);
+    if (e.getRetryAfter() >= 0) {
+        response.setHeader("Retry-After", String.valueOf((int) e.getRetryAfter()));
+    }
+    // e.getLimit(), e.getRemaining(), e.getReset()
+}
+```
+
+`RateLimitError` methods:
+- `getRetryAfter()` — seconds from `Retry-After` header (-1 if absent)
+- `getLimit()` — `X-RateLimit-Limit` header value (-1 if absent)
+- `getRemaining()` — `X-RateLimit-Remaining` header value (-1 if absent)
+- `getReset()` — `X-RateLimit-Reset` Unix timestamp (-1 if absent)
+
 ## Documentation
 
 Full integration guide: https://docs.agentadmit.com/getting-started
