@@ -35,7 +35,7 @@ Your app now supports AI agent connections with:
 
 ## How It Works
 
-1. User clicks "AI Agent Access" in your app
+1. User clicks "AgentAdmit" in your app
 2. Selects scopes and connection duration
 3. Gets a token to give to their AI agent
 4. Agent exchanges the token for scoped API access
@@ -102,7 +102,7 @@ try {
 
 ## Documentation
 
-Full integration guide: https://docs.agentadmit.com/getting-started
+Full integration guide: https://agentadmit.com/docs/app-owner-guide
 
 ## License
 

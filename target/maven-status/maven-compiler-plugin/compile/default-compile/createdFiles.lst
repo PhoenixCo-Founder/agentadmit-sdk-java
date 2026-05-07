@@ -1,3 +1,4 @@
+app/agentadmit/AgentAdmitException$RateLimitError.class
 app/agentadmit/IntrospectionClient.class
 app/agentadmit/AgentAdmitException.class
 app/agentadmit/ScopeEnforcementAspect.class
