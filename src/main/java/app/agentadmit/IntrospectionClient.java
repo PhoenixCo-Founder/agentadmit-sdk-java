@@ -136,13 +136,12 @@ public class IntrospectionClient {
 
     private HttpResponse<String> sendIntrospectionRequest(String token) throws AgentAdmitException {
         try {
+            String body = "{\"token\":\"" + token + "\"}";
             HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(config.getVerifyUrl()))
-                .header("Authorization", "Bearer " + token)
-                .header("X-App-Id", config.getAppId())
-                .header("X-Api-Key", config.getApiKey())
+                .header("Authorization", "Bearer " + config.getApiKey())
                 .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.noBody())
+                .POST(HttpRequest.BodyPublishers.ofString(body))
                 .timeout(Duration.ofSeconds(5))
                 .build();
             return httpClient.send(request, HttpResponse.BodyHandlers.ofString());
