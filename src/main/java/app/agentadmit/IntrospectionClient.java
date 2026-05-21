@@ -107,6 +107,16 @@ public class IntrospectionClient {
                 }
 
                 Map<String, Object> data = objectMapper.readValue(response.body(), Map.class);
+
+                // Check active flag (RFC 7662 introspection pattern).
+                // The verify endpoint returns {active: false} with HTTP 200 for invalid/
+                // expired/revoked tokens. Without this check, we'd read empty scopes.
+                Boolean active = (Boolean) data.get("active");
+                if (active == null || !active) {
+                    String reason = (String) data.getOrDefault("error", "invalid_token");
+                    throw new AgentAdmitException("Token is not active: " + reason, 401);
+                }
+
                 String userId = (String) data.get("user_id");
                 String connectionId = (String) data.get("connection_id");
                 @SuppressWarnings("unchecked")
