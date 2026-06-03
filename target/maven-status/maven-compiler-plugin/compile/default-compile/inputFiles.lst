@@ -1,7 +1,0 @@
-/Users/phoenixempire/.openclaw/workspace/agentadmit-sdk-java/src/main/java/app/agentadmit/AgentAdmitConfig.java
-/Users/phoenixempire/.openclaw/workspace/agentadmit-sdk-java/src/main/java/app/agentadmit/AgentAdmitException.java
-/Users/phoenixempire/.openclaw/workspace/agentadmit-sdk-java/src/main/java/app/agentadmit/AgentAdmitFilter.java
-/Users/phoenixempire/.openclaw/workspace/agentadmit-sdk-java/src/main/java/app/agentadmit/IntrospectionClient.java
-/Users/phoenixempire/.openclaw/workspace/agentadmit-sdk-java/src/main/java/app/agentadmit/RequireScope.java
-/Users/phoenixempire/.openclaw/workspace/agentadmit-sdk-java/src/main/java/app/agentadmit/RequireScopeIfAgent.java
-/Users/phoenixempire/.openclaw/workspace/agentadmit-sdk-java/src/main/java/app/agentadmit/ScopeEnforcementAspect.java

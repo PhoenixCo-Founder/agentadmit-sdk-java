@@ -1,9 +1,0 @@
-app/agentadmit/AgentAdmitException$RateLimitError.class
-app/agentadmit/IntrospectionClient.class
-app/agentadmit/AgentAdmitException.class
-app/agentadmit/ScopeEnforcementAspect.class
-app/agentadmit/RequireScope.class
-app/agentadmit/AgentAdmitFilter.class
-app/agentadmit/AgentAdmitConfig.class
-app/agentadmit/RequireScopeIfAgent.class
-app/agentadmit/IntrospectionClient$IntrospectionResult.class
