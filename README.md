@@ -2,6 +2,9 @@
 
 User-mediated AI agent authorization. Plug-and-play for any Spring Boot app.
 
+> **Get started:** Sign up at [agentadmit.com](https://agentadmit.com) → Get your test keys → Install the SDK → Build.
+> Test keys are available immediately after signup. Live keys become available when you subscribe an app.
+
 ## Quick Start
 
 Add the dependency to your `pom.xml` or `build.gradle`, then configure:
