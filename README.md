@@ -131,3 +131,50 @@ For complete compliance guidance, see our [compliance guide](https://agentadmit.
 ## License
 
 All rights reserved. Patent pending.
+
+## Security Alerts
+
+Inject `AlertsClient` into your Spring service and monitor suspicious agent activity.
+
+```java
+@Autowired
+private AlertsClient alertsClient;
+```
+
+Six alert type constants: `ALERT_TYPE_VOLUME_SPIKE`, `ALERT_TYPE_FAILED_SCOPE_ATTEMPTS`, `ALERT_TYPE_BURST_PATTERN`, `ALERT_TYPE_STALE_REACTIVATION`, `ALERT_TYPE_NEW_SCOPE_USAGE`, `ALERT_TYPE_REVOKED_CONNECTION_ATTEMPT`.
+
+### Configure Alert Thresholds
+
+```java
+Map<String, Object> result = alertsClient.configureAlerts(
+    AlertsClient.ConfigureAlertsRequest.builder()
+        .appId("app_abc123")
+        .alertType(AlertsClient.ALERT_TYPE_VOLUME_SPIKE)
+        .enabled(true)
+        .thresholdValue(100.0)
+        .thresholdWindowMinutes(5)
+        .killSwitchEnabled(true)
+        .build()
+);
+```
+
+### List Alert Events
+
+```java
+Map<String, Object> events = alertsClient.listAlerts("app_abc123", null, AlertsClient.ALERT_TYPE_VOLUME_SPIKE);
+```
+
+### Get Current Config
+
+```java
+Map<String, Object> config = alertsClient.getAlertConfig("app_abc123");
+```
+
+
+### Notifying Your Users
+
+AgentAdmit detects anomalies, fires alerts, and (with kill switch) auto-revokes connections. **How you notify your own users is up to you.** AgentAdmit provides the data — you deliver it through your own system (in-app notifications, email, push, etc.).
+
+- **Poll alerts** — Use the SDK methods above from your backend to check for new events, then notify users through your existing system.
+- **Webhook delivery (coming soon)** — Configure a webhook URL in your AgentAdmit dashboard. When an alert fires, AgentAdmit POSTs the payload to your server.
+- **React SDK** — Embed the `<AlertsPanel>` component so users can view their own alert history and tighten thresholds.
