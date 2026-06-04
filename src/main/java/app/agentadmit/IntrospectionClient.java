@@ -27,6 +27,11 @@ public class IntrospectionClient {
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
 
+    /**
+     * Construct the introspection client.
+     *
+     * @param config AgentAdmit configuration providing API key and endpoint URLs
+     */
     public IntrospectionClient(AgentAdmitConfig config) {
         this.config = config;
         this.httpClient = HttpClient.newBuilder()
@@ -184,6 +189,11 @@ public class IntrospectionClient {
 
     /**
      * Result of a successful introspection call.
+     *
+     * @param userId       the end user's identifier
+     * @param connectionId the AgentAdmit connection identifier
+     * @param scopes       list of granted scope strings
+     * @param agentLabel   human-readable agent display name
      */
     public record IntrospectionResult(
         String userId,
@@ -191,6 +201,12 @@ public class IntrospectionClient {
         List<String> scopes,
         String agentLabel
     ) {
+        /**
+         * Check whether a specific scope was granted.
+         *
+         * @param scope the scope string to check
+         * @return {@code true} if the scope is present in the granted scopes
+         */
         public boolean hasScope(String scope) {
             return scopes.contains(scope);
         }

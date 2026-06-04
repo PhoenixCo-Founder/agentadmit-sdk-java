@@ -19,6 +19,18 @@ import java.util.List;
 @Component
 public class ScopeEnforcementAspect {
 
+    /** Create a new scope enforcement aspect. */
+    public ScopeEnforcementAspect() {}
+
+    /**
+     * Enforce scope on methods annotated with {@link RequireScope}.
+     * Returns 401 if no agent token is present, or 403 if the required scope is missing.
+     *
+     * @param joinPoint    the intercepted method invocation
+     * @param requireScope the annotation carrying the required scope value
+     * @return the method result if scope is satisfied, or {@code null} after writing an error response
+     * @throws Throwable if the underlying method throws
+     */
     @Around("@annotation(requireScope)")
     public Object enforceScope(ProceedingJoinPoint joinPoint, RequireScope requireScope) throws Throwable {
         HttpServletRequest request = getCurrentRequest();
@@ -36,6 +48,15 @@ public class ScopeEnforcementAspect {
         return checkScopeAndProceed(joinPoint, requireScope.value(), request);
     }
 
+    /**
+     * Enforce scope only when the request carries an agent token.
+     * Regular (non-agent) requests pass through without scope enforcement.
+     *
+     * @param joinPoint          the intercepted method invocation
+     * @param requireScopeIfAgent the annotation carrying the required scope value
+     * @return the method result, or {@code null} after writing an error response
+     * @throws Throwable if the underlying method throws
+     */
     @Around("@annotation(requireScopeIfAgent)")
     public Object enforceScopeIfAgent(ProceedingJoinPoint joinPoint, RequireScopeIfAgent requireScopeIfAgent) throws Throwable {
         HttpServletRequest request = getCurrentRequest();

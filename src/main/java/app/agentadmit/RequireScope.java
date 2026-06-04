@@ -7,15 +7,21 @@ import java.lang.annotation.Target;
 
 /**
  * Annotation to enforce a required scope on a controller method.
- * Agent must have this scope or a 403 is returned.
+ * The agent must have the specified scope or a 403 Forbidden response is returned.
  *
- * Usage:
- *   @GetMapping("/api/orders")
- *   @RequireScope("read:orders")
- *   public List<Order> getOrders() { ... }
+ * <p>Usage:
+ * <pre>{@code
+ * @GetMapping("/api/orders")
+ * @RequireScope("read:orders")
+ * public List<Order> getOrders() { ... }
+ * }</pre>
  */
 @Target(ElementType.METHOD)
 @Retention(RetentionPolicy.RUNTIME)
 public @interface RequireScope {
+    /**
+     * The scope string required for this endpoint.
+     * @return the required scope
+     */
     String value();
 }

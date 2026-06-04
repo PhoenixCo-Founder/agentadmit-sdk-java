@@ -27,11 +27,25 @@ public class AgentAdmitFilter implements Filter {
     private final AgentAdmitConfig config;
     private final IntrospectionClient introspectionClient;
 
+    /**
+     * Construct the filter with required dependencies.
+     *
+     * @param config               AgentAdmit configuration
+     * @param introspectionClient  client used to verify tokens via hosted introspection
+     */
     public AgentAdmitFilter(AgentAdmitConfig config, IntrospectionClient introspectionClient) {
         this.config = config;
         this.introspectionClient = introspectionClient;
     }
 
+    /**
+     * Intercept incoming requests. If the Authorization header carries an AgentAdmit
+     * access token ({@code ag_at_} prefix), validate it via introspection and set
+     * request attributes for downstream controllers. Invalid tokens receive an
+     * immediate error response.
+     *
+     * {@inheritDoc}
+     */
     @Override
     public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
             throws IOException, ServletException {

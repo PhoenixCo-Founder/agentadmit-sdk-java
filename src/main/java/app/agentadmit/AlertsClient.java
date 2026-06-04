@@ -32,17 +32,28 @@ public class AlertsClient {
 
     private static final Logger logger = LoggerFactory.getLogger(AlertsClient.class);
 
+    /** Alert type: unusual request volume spike. */
     public static final String ALERT_TYPE_VOLUME_SPIKE               = "volume_spike";
+    /** Alert type: repeated scope access failures. */
     public static final String ALERT_TYPE_FAILED_SCOPE_ATTEMPTS      = "failed_scope_attempts";
+    /** Alert type: rapid burst of requests. */
     public static final String ALERT_TYPE_BURST_PATTERN              = "burst_pattern";
+    /** Alert type: dormant connection suddenly active. */
     public static final String ALERT_TYPE_STALE_REACTIVATION         = "stale_reactivation";
+    /** Alert type: agent using a scope for the first time. */
     public static final String ALERT_TYPE_NEW_SCOPE_USAGE            = "new_scope_usage";
+    /** Alert type: revoked connection attempting authentication. */
     public static final String ALERT_TYPE_REVOKED_CONNECTION_ATTEMPT = "revoked_connection_attempt";
 
     private final AgentAdmitConfig config;
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
 
+    /**
+     * Construct the alerts client.
+     *
+     * @param config AgentAdmit configuration providing API key and endpoint URLs
+     */
     public AlertsClient(AgentAdmitConfig config) {
         this.config = config;
         this.httpClient = HttpClient.newBuilder()
@@ -139,7 +150,13 @@ public class AlertsClient {
     }
 
     /**
-     * Convenience overload for listAlerts with default limit/offset.
+     * Convenience overload for listAlerts with default limit (50) and offset (0).
+     *
+     * @param appId        your AgentAdmit application ID
+     * @param connectionId optional connection filter (may be null)
+     * @param alertType    optional alert type filter (may be null)
+     * @return alert events map
+     * @throws AgentAdmitException if the request fails
      */
     public Map<String, Object> listAlerts(String appId, String connectionId, String alertType)
         throws AgentAdmitException {
@@ -184,7 +201,13 @@ public class AlertsClient {
         }
     }
 
-    /** Convenience overload with no connectionId filter. */
+    /**
+     * Convenience overload for getAlertConfig with no connection filter.
+     *
+     * @param appId your AgentAdmit application ID
+     * @return alert configuration map
+     * @throws AgentAdmitException if the request fails
+     */
     public Map<String, Object> getAlertConfig(String appId) throws AgentAdmitException {
         return getAlertConfig(appId, null);
     }
@@ -210,6 +233,11 @@ public class AlertsClient {
         private final Double killSwitchThresholdValue;
         private final Integer killSwitchThresholdWindowMinutes;
 
+
+        /**
+         * Construct from builder.
+         * @param b the builder
+         */
         private ConfigureAlertsRequest(Builder b) {
             this.appId = b.appId;
             this.alertType = b.alertType;
@@ -224,8 +252,16 @@ public class AlertsClient {
             this.killSwitchThresholdWindowMinutes = b.killSwitchThresholdWindowMinutes;
         }
 
+        /**
+         * Create a new builder for alert configuration requests.
+         * @return a new Builder instance
+         */
         public static Builder builder() { return new Builder(); }
 
+        /**
+         * Convert this request to a map for JSON serialization.
+         * @return map of non-null request parameters
+         */
         public Map<String, Object> toMap() {
             Map<String, Object> m = new HashMap<>();
             m.put("app_id", appId);
@@ -242,7 +278,11 @@ public class AlertsClient {
             return m;
         }
 
+        /** Builder for constructing alert configuration requests. */
         public static class Builder {
+            /** Create a new builder. */
+            public Builder() {}
+
             private String appId;
             private String alertType;
             private String connectionId;
@@ -255,18 +295,78 @@ public class AlertsClient {
             private Double killSwitchThresholdValue;
             private Integer killSwitchThresholdWindowMinutes;
 
+            /**
+             * Set the application ID.
+             * @param v application ID
+             * @return this builder
+             */
             public Builder appId(String v)                             { this.appId = v; return this; }
+            /**
+             * Set the alert type.
+             * @param v alert type constant
+             * @return this builder
+             */
             public Builder alertType(String v)                         { this.alertType = v; return this; }
+            /**
+             * Set the connection ID filter.
+             * @param v connection ID
+             * @return this builder
+             */
             public Builder connectionId(String v)                      { this.connectionId = v; return this; }
+            /**
+             * Enable or disable the alert.
+             * @param v true to enable
+             * @return this builder
+             */
             public Builder enabled(boolean v)                          { this.enabled = v; return this; }
+            /**
+             * Set the threshold value.
+             * @param v threshold value
+             * @return this builder
+             */
             public Builder thresholdValue(double v)                    { this.thresholdValue = v; return this; }
+            /**
+             * Set the threshold window in minutes.
+             * @param v window in minutes
+             * @return this builder
+             */
             public Builder thresholdWindowMinutes(int v)               { this.thresholdWindowMinutes = v; return this; }
+            /**
+             * Set the threshold rate per minute.
+             * @param v rate per minute
+             * @return this builder
+             */
             public Builder thresholdRatePerMinute(double v)            { this.thresholdRatePerMinute = v; return this; }
+            /**
+             * Set stale days for reactivation alerts.
+             * @param v days
+             * @return this builder
+             */
             public Builder staleDays(int v)                            { this.staleDays = v; return this; }
+            /**
+             * Enable or disable the kill switch.
+             * @param v true to enable
+             * @return this builder
+             */
             public Builder killSwitchEnabled(boolean v)                { this.killSwitchEnabled = v; return this; }
+            /**
+             * Set the kill switch threshold value.
+             * @param v threshold value
+             * @return this builder
+             */
             public Builder killSwitchThresholdValue(double v)          { this.killSwitchThresholdValue = v; return this; }
+            /**
+             * Set the kill switch threshold window in minutes.
+             * @param v window in minutes
+             * @return this builder
+             */
             public Builder killSwitchThresholdWindowMinutes(int v)     { this.killSwitchThresholdWindowMinutes = v; return this; }
 
+            /**
+             * Build the request. Requires appId and alertType.
+             * @return the constructed request
+             * @throws IllegalStateException if appId or alertType is null
+             */
             public ConfigureAlertsRequest build() {
                 if (appId == null || alertType == null) {
                     throw new IllegalStateException("appId and alertType are required");
