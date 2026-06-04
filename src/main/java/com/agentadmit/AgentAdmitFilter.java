@@ -1,4 +1,4 @@
-package app.agentadmit;
+package com.agentadmit;
 
 import jakarta.servlet.*;
 import jakarta.servlet.http.HttpServletRequest;

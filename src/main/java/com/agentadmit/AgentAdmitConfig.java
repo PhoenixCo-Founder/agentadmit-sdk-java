@@ -1,4 +1,4 @@
-package app.agentadmit;
+package com.agentadmit;
 
 /*
  * IMPORTANT: AgentAdmit uses MANDATORY hosted introspection.

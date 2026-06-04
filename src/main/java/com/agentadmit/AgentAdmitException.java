@@ -1,4 +1,4 @@
-package app.agentadmit;
+package com.agentadmit;
 
 /**
  * Exception thrown by AgentAdmit SDK operations.
