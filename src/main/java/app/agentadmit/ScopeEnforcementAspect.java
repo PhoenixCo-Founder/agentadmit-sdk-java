@@ -12,8 +12,9 @@ import org.springframework.web.context.request.ServletRequestAttributes;
 import java.util.List;
 
 /**
- * AOP aspect that intercepts methods annotated with @RequireScope or @RequireScopeIfAgent
- * and enforces scope requirements.
+ * AOP aspect that intercepts methods annotated with {@link RequireScope} or
+ * {@link RequireScopeIfAgent} and enforces scope requirements against the
+ * scopes granted in the validated AgentAdmit token.
  */
 @Aspect
 @Component
