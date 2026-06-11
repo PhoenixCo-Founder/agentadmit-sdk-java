@@ -12,8 +12,28 @@ import java.io.IOException;
 /**
  * Servlet filter that intercepts requests with ag_at_ tokens
  * and validates them via introspection.
- * 
- * Sets request attributes for downstream use:
+ *
+ * <p>Where this filter sits in the AgentAdmit flow:
+ * <ol>
+ *   <li><b>Issue</b> — your backend mints a connection token for a signed-in
+ *       user via {@link TokensClient#issueToken(String, java.util.List)}
+ *       (duration is tri-state: default 30 days, {@code durationUntilRevoked()},
+ *       or explicit seconds). The returned {@code token} ({@code ag_ct_…}) is
+ *       handed to the user's agent. It is single-use and short-lived.</li>
+ *   <li><b>Exchange</b> — the agent swaps it for an access token via
+ *       {@link TokensClient#exchange(String, String, String)} (no API key —
+ *       the connection token itself is the credential). The result is an
+ *       {@code ag_at_…} access token.</li>
+ *   <li><b>Verify</b> — the agent calls your API with
+ *       {@code Authorization: Bearer ag_at_…}; THIS filter introspects every
+ *       such request through {@link IntrospectionClient} (the billed call)
+ *       and exposes the validated identity as request attributes.</li>
+ *   <li><b>Revoke</b> — when the user disconnects the agent, call
+ *       {@link TokensClient#revoke(String, String)}; subsequent requests on
+ *       that connection fail introspection with {@code connection_revoked}.</li>
+ * </ol>
+ *
+ * <p>Sets request attributes for downstream use:
  *   agentadmit.authType  — "agent" or null
  *   agentadmit.userId    — validated user ID
  *   agentadmit.scopes    — granted scopes
