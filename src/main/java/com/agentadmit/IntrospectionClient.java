@@ -114,12 +114,22 @@ public class IntrospectionClient {
                 Map<String, Object> data = objectMapper.readValue(response.body(), Map.class);
 
                 // Check active flag (RFC 7662 introspection pattern).
-                // The verify endpoint returns {active: false} with HTTP 200 for invalid/
-                // expired/revoked tokens. Without this check, we'd read empty scopes.
+                // The verify endpoint returns {active: false} with HTTP 200 for
+                // invalid/expired/revoked tokens; the error code is one of
+                // invalid_token, token_expired, token_revoked, connection_revoked,
+                // connection_expired, or environment_mismatch. Unknown codes pass
+                // through unchanged. Without this check, we'd read empty scopes.
                 Boolean active = (Boolean) data.get("active");
                 if (active == null || !active) {
                     String reason = (String) data.getOrDefault("error", "invalid_token");
                     throw new AgentAdmitException("Token is not active: " + reason, 401);
+                }
+
+                // insufficient_scope arrives with active: true (token valid,
+                // requested scope not granted) — treat it as a 403.
+                if ("insufficient_scope".equals(data.get("error"))) {
+                    String desc = (String) data.getOrDefault("error_description", "Scope not granted");
+                    throw new AgentAdmitException(desc, 403);
                 }
 
                 String userId = (String) data.get("user_id");
@@ -127,12 +137,17 @@ public class IntrospectionClient {
                 @SuppressWarnings("unchecked")
                 List<String> scopes = (List<String>) data.getOrDefault("scopes", List.of());
                 String agentLabel = (String) data.getOrDefault("agent_label", "Unknown Agent");
+                String sub = (String) data.get("sub");
+                String role = (String) data.get("role");
+                String appId = (String) data.get("app_id");
+                String jti = (String) data.get("jti");
+                long exp = data.get("exp") instanceof Number n ? n.longValue() : 0L;
 
                 if (userId == null) {
                     throw new AgentAdmitException("Introspection returned no user", 401);
                 }
 
-                return new IntrospectionResult(userId, connectionId, scopes, agentLabel);
+                return new IntrospectionResult(userId, connectionId, scopes, agentLabel, sub, role, appId, jti, exp);
             } catch (AgentAdmitException e) {
                 throw e;
             } catch (Exception e) {
@@ -151,7 +166,9 @@ public class IntrospectionClient {
 
     private HttpResponse<String> sendIntrospectionRequest(String token) throws AgentAdmitException {
         try {
-            String body = "{\"token\":\"" + token + "\"}";
+            // Serialize via Jackson — string concatenation would allow JSON
+            // injection through a hostile token value.
+            String body = objectMapper.writeValueAsString(Map.of("token", token));
             HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(config.getVerifyUrl()))
                 .header("Authorization", "Bearer " + config.getApiKey())
@@ -194,12 +211,22 @@ public class IntrospectionClient {
      * @param connectionId the AgentAdmit connection identifier
      * @param scopes       list of granted scope strings
      * @param agentLabel   human-readable agent display name
+     * @param sub          token subject
+     * @param role         the user's role granted on the connection
+     * @param appId        the AgentAdmit application identifier
+     * @param jti          unique JWT ID of the access token
+     * @param exp          token expiry as a Unix timestamp (0 if absent)
      */
     public record IntrospectionResult(
         String userId,
         String connectionId,
         List<String> scopes,
-        String agentLabel
+        String agentLabel,
+        String sub,
+        String role,
+        String appId,
+        String jti,
+        long exp
     ) {
         /**
          * Check whether a specific scope was granted.

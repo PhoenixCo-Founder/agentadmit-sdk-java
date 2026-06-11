@@ -16,7 +16,7 @@ import org.springframework.stereotype.Component;
  * agentadmit:
  *   app-id: "app_abc123"
  *   api-key: "aa_live_xxxx"
- *   verify-url: "https://api.agentadmit.com/v1/verify"
+ *   verify-url: "https://api.agentadmit.com/api/v1/verify"
  *   api-url: "https://api.agentadmit.com"
  *   user-lookup-field: "userId"
  */
@@ -34,7 +34,7 @@ public class AgentAdmitConfig {
     private String apiKey = "";
 
     /** Token verification endpoint URL. */
-    private String verifyUrl = "https://api.agentadmit.com/v1/verify";
+    private String verifyUrl = "https://api.agentadmit.com/api/v1/verify";
 
     /** Base API URL for AgentAdmit services. */
     private String apiUrl = "https://api.agentadmit.com";
@@ -65,10 +65,18 @@ public class AgentAdmitConfig {
      */
     public String getApiKey() { return apiKey; }
     /**
-     * Set the API key.
+     * Set the API key. Must start with {@code aa_test_} or {@code aa_live_}.
      * @param apiKey your AgentAdmit API key
+     * @throws IllegalArgumentException if a non-empty key has the wrong prefix
      */
-    public void setApiKey(String apiKey) { this.apiKey = apiKey; }
+    public void setApiKey(String apiKey) {
+        if (apiKey != null && !apiKey.isEmpty()
+                && !apiKey.startsWith("aa_test_") && !apiKey.startsWith("aa_live_")) {
+            // Never echo the key itself.
+            throw new IllegalArgumentException("apiKey must start with 'aa_test_' or 'aa_live_'");
+        }
+        this.apiKey = apiKey;
+    }
 
     /**
      * Get the token verification endpoint URL.

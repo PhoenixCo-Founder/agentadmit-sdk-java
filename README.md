@@ -14,7 +14,7 @@ Add the dependency to your `pom.xml` or `build.gradle`, then configure:
 agentadmit:
   app-id: ${AGENTADMIT_APP_ID}
   api-key: ${AGENTADMIT_API_KEY}
-  verify-url: https://api.agentadmit.com/v1/verify
+  verify-url: https://api.agentadmit.com/api/v1/verify
 ```
 
 Add scope enforcement to any endpoint:
@@ -176,5 +176,40 @@ Map<String, Object> config = alertsClient.getAlertConfig("app_abc123");
 AgentAdmit detects anomalies, fires alerts, and (with kill switch) auto-revokes connections. **How you notify your own users is up to you.** AgentAdmit provides the data — you deliver it through your own system (in-app notifications, email, push, etc.).
 
 - **Poll alerts** — Use the SDK methods above from your backend to check for new events, then notify users through your existing system.
-- **Webhook delivery (coming soon)** — Configure a webhook URL in your AgentAdmit dashboard. When an alert fires, AgentAdmit POSTs the payload to your server.
+- **Webhook delivery** — Configure a webhook URL in your AgentAdmit dashboard. When an alert fires, AgentAdmit POSTs the payload to your server, signed with your `whsec_…` secret. Always verify the signature against the raw request body before trusting the payload:
+
+  ```java
+  @PostMapping("/agentadmit/alerts")
+  public ResponseEntity<Void> alerts(@RequestBody byte[] payload,
+                                     @RequestHeader("X-AgentAdmit-Signature") String signature) {
+      try {
+          Webhooks.verifySignature(payload, signature, webhookSecret); // whsec_…
+      } catch (AgentAdmitException e) {
+          return ResponseEntity.badRequest().build();
+      }
+      // payload is authentic — parse and handle the alert
+      return ResponseEntity.ok().build();
+  }
+  ```
+
+  The header format is `t=<unix_ts>,v1=<hex>` — an HMAC-SHA256 of `{t}.{rawBody}` keyed with your signing secret. Verification compares in constant time and rejects timestamps more than 5 minutes off (replay protection).
 - **React SDK** — Embed the `<AlertsPanel>` component so users can view their own alert history and tighten thresholds.
+
+### Issuing & Exchanging Tokens
+
+```java
+// duration is tri-state: omit both duration calls → AgentAdmit default (30 days);
+// .durationUntilRevoked() → until the user revokes; .durationSeconds(n) → explicit.
+Map<String, Object> issued = tokensClient
+    .issueToken("user_42", List.of("read:orders"))
+    .role("user")
+    .durationUntilRevoked()
+    .send();
+String connectionToken = (String) issued.get("token"); // ag_ct_…
+
+// Agent side — no API key needed; the connection token is the credential.
+Map<String, Object> granted = tokensClient.exchange(connectionToken, "MyAssistant", null);
+
+// Revoke when the user disconnects the agent.
+tokensClient.revoke((String) granted.get("connection_id"), "user_requested");
+```
