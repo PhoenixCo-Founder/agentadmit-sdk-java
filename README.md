@@ -7,7 +7,9 @@ User-mediated AI agent authorization. Plug-and-play for any Spring Boot app.
 
 ## Quick Start
 
-Add the dependency to your `pom.xml` or `build.gradle`, then configure:
+Add the dependency to your `pom.xml` or `build.gradle`. The SDK ships a Spring Boot auto-configuration (`META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports`), so no `@ComponentScan` or manual bean registration is needed -- the filter and scope-enforcement aspect activate automatically when the jar is on the classpath.
+
+Configure via `application.yml`:
 
 ```yaml
 # application.yml
@@ -17,13 +19,21 @@ agentadmit:
   verify-url: https://api.agentadmit.com/api/v1/verify
 ```
 
+Both `verify-url` and `api-url` must be HTTPS. Plain HTTP is only permitted on loopback addresses (`localhost`, `127.0.0.1`, `[::1]`) for local development -- any other non-HTTPS URL causes a configuration exception at startup.
+
+On startup you will see one INFO log line confirming enforcement is active:
+
+```
+AgentAdmit scope enforcement is active (filter + aspect registered).
+```
+
 Add scope enforcement to any endpoint:
 
 ```java
 @GetMapping("/api/orders")
-@AgentAdmitScope("read:orders")
+@RequireScope("read:orders")
 public List<Order> getOrders(@AuthenticationPrincipal UserDetails user) {
-    // Your existing logic — unchanged
+    // Your existing logic -- unchanged
     return orderService.getOrdersForUser(user.getId());
 }
 ```
@@ -33,8 +43,7 @@ Your app now supports AI agent connections with:
 - User-controlled connection duration
 - Token generation and exchange
 - Mandatory introspection (every agent request validated through AgentAdmit)
-- Revocation and audit logging
-- Discovery endpoint at `/.well-known/agentadmit`
+- Revocation
 
 ## How It Works
 
@@ -50,7 +59,7 @@ The token goes to the human, not the agent. No automated delivery = no prompt in
 
 **Mandatory introspection.** All token validation goes through api.agentadmit.com. There is no self-hosted mode. No local JWT validation. No bypass. This is required for security, audit logging, and scope enforcement.
 
-**Admin revocation.** As the app operator, you can revoke any user's agent connection via `DELETE /agentadmit/admin/connections/{connection_id}` (requires admin role or `manage:connections` scope).
+**Admin revocation.** As the app operator, you can revoke any user's agent connection via `TokensClient#revoke(connectionId, reason)`, which calls the AgentAdmit hosted service. Use this from your own admin controllers.
 
 **Embeddable admin panel.** Drop the `<AgentAdmitAdminPanel>` React component into your admin section to view all agent connections, usage metrics, billing status, and revoke any connection without leaving your app. See the React SDK for details.
 
@@ -58,7 +67,7 @@ The token goes to the human, not the agent. No automated delivery = no prompt in
 
 ## Rate Limiting
 
-The AgentAdmit introspection endpoint enforces rate limits. The Java SDK handles HTTP 429 responses **automatically** with exponential backoff and jitter — no changes needed in your filter or aspect code.
+The AgentAdmit introspection endpoint enforces rate limits. The Java SDK handles HTTP 429 responses **automatically** with exponential backoff and jitter  --  no changes needed in your filter or aspect code.
 
 ### Retry behavior
 
@@ -70,7 +79,7 @@ The AgentAdmit introspection endpoint enforces rate limits. The Java SDK handles
 | Jitter | 0–500 ms | Random addition to each delay |
 | Max retries | **3** | Configurable |
 
-The SDK also respects the `Retry-After` response header — if present, it overrides the computed backoff delay.
+The SDK also respects the `Retry-After` response header  --  if present, it overrides the computed backoff delay.
 
 ### Configuring max retries
 
@@ -98,10 +107,10 @@ try {
 ```
 
 `RateLimitError` methods:
-- `getRetryAfter()` — seconds from `Retry-After` header (-1 if absent)
-- `getLimit()` — `X-RateLimit-Limit` header value (-1 if absent)
-- `getRemaining()` — `X-RateLimit-Remaining` header value (-1 if absent)
-- `getReset()` — `X-RateLimit-Reset` Unix timestamp (-1 if absent)
+- `getRetryAfter()`  --  seconds from `Retry-After` header (-1 if absent)
+- `getLimit()`  --  `X-RateLimit-Limit` header value (-1 if absent)
+- `getRemaining()`  --  `X-RateLimit-Remaining` header value (-1 if absent)
+- `getReset()`  --  `X-RateLimit-Reset` Unix timestamp (-1 if absent)
 
 ## Documentation
 
@@ -113,14 +122,14 @@ Full integration guide: https://agentadmit.com/docs/app-owner-guide
 The AgentAdmit Java SDK runs server-side and does not interact with app stores or end-user devices directly.
 
 ### What the SDK does
-- Validates AgentAdmit tokens by calling AgentAdmit's hosted introspection endpoint (`https://api.agentadmit.com/api/v1/verify`) on every agent request — this is mandatory introspection; there is no local or offline validation mode
+- Validates AgentAdmit tokens by calling AgentAdmit's hosted introspection endpoint (`https://api.agentadmit.com/api/v1/verify`) on every agent request  --  this is mandatory introspection; there is no local or offline validation mode
 - Enforces scope-based access control on your API routes
-- Manages connection lifecycle (create, revoke, audit) using your configured storage backend
+- Manages connection lifecycle (create, revoke) via the AgentAdmit hosted service
 
 ### What the SDK does NOT do
-- Does not transmit raw end-user PII (such as name, email, or device identifiers) — each introspection request sends the opaque access token and your API key
-- Does not perform passive background telemetry or analytics — network calls occur only during active token validation
-- Does not maintain its own persistent storage — local state (connections, audit log) lives in the storage backend you configure
+- Does not transmit raw end-user PII (such as name, email, or device identifiers)  --  each introspection request sends the opaque access token and your API key
+- Does not perform passive background telemetry or analytics  --  network calls occur only during active token validation
+- Does not maintain its own persistent storage -- connection state and audit log are managed by the AgentAdmit hosted service
 
 ### What the AgentAdmit hosted service records
 On every token validation, AgentAdmit's `/api/v1/verify` endpoint receives the access token and API key, resolves the token to its `user_id`, `connection_id`, granted `scopes`, and `agent_label`, and records per-call metadata (including the endpoint and timestamp) for billing, audit logging, the security alerts engine, and usage metering. This is integral to how AgentAdmit works and applies to both test and live keys. See the "Mandatory introspection" notes above and the [compliance guide](https://agentadmit.com/docs/compliance) for the full data-handling description.
@@ -175,10 +184,10 @@ Map<String, Object> config = alertsClient.getAlertConfig("app_abc123");
 
 ### Notifying Your Users
 
-AgentAdmit detects anomalies, fires alerts, and (with kill switch) auto-revokes connections. **How you notify your own users is up to you.** AgentAdmit provides the data — you deliver it through your own system (in-app notifications, email, push, etc.).
+AgentAdmit detects anomalies, fires alerts, and (with kill switch) auto-revokes connections. **How you notify your own users is up to you.** AgentAdmit provides the data  --  you deliver it through your own system (in-app notifications, email, push, etc.).
 
-- **Poll alerts** — Use the SDK methods above from your backend to check for new events, then notify users through your existing system.
-- **Webhook delivery** — Configure a webhook URL in your AgentAdmit dashboard. When an alert fires, AgentAdmit POSTs the payload to your server, signed with your `whsec_…` secret. Always verify the signature against the raw request body before trusting the payload:
+- **Poll alerts**  --  Use the SDK methods above from your backend to check for new events, then notify users through your existing system.
+- **Webhook delivery**  --  Configure a webhook URL in your AgentAdmit dashboard. When an alert fires, AgentAdmit POSTs the payload to your server, signed with your `whsec_…` secret. Always verify the signature against the raw request body before trusting the payload:
 
   ```java
   @PostMapping("/agentadmit/alerts")
@@ -189,13 +198,13 @@ AgentAdmit detects anomalies, fires alerts, and (with kill switch) auto-revokes 
       } catch (AgentAdmitException e) {
           return ResponseEntity.badRequest().build();
       }
-      // payload is authentic — parse and handle the alert
+      // payload is authentic  --  parse and handle the alert
       return ResponseEntity.ok().build();
   }
   ```
 
-  The header format is `t=<unix_ts>,v1=<hex>` — an HMAC-SHA256 of `{t}.{rawBody}` keyed with your signing secret. Verification compares in constant time and rejects timestamps more than 5 minutes off (replay protection).
-- **React SDK** — Embed the `<AlertsPanel>` component so users can view their own alert history and tighten thresholds.
+  The header format is `t=<unix_ts>,v1=<hex>`  --  an HMAC-SHA256 of `{t}.{rawBody}` keyed with your signing secret. Verification compares in constant time and rejects timestamps more than 5 minutes off (replay protection).
+- **React SDK**  --  Embed the `<AlertsPanel>` component so users can view their own alert history and tighten thresholds.
 
 ### Issuing & Exchanging Tokens
 
@@ -209,7 +218,7 @@ Map<String, Object> issued = tokensClient
     .send();
 String connectionToken = (String) issued.get("token"); // ag_ct_…
 
-// Agent side — no API key needed; the connection token is the credential.
+// Agent side  --  no API key needed; the connection token is the credential.
 Map<String, Object> granted = tokensClient.exchange(connectionToken, "MyAssistant", null);
 
 // Revoke when the user disconnects the agent.

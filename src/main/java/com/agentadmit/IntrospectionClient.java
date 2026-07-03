@@ -23,6 +23,13 @@ import java.util.concurrent.ThreadLocalRandom;
 public class IntrospectionClient {
 
     private static final Logger logger = LoggerFactory.getLogger(IntrospectionClient.class);
+
+    /** Hard cap (ms) on any single retry wait — including a server-supplied Retry-After. */
+    static final long MAX_RETRY_WAIT_MS = 30_000L;
+
+    /** Hard cap (ms) on cumulative wait across all retries of a single verify call. */
+    static final long MAX_RETRY_BUDGET_MS = 120_000L;
+
     private final AgentAdmitConfig config;
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
@@ -57,7 +64,8 @@ public class IntrospectionClient {
         }
 
         int maxRetries = config.getMaxRetries();
-        long delayMs = 1_000L; // initial backoff: 1 second
+        long delayMs = 1_000L;  // initial backoff: 1 second
+        long waitedMs = 0L;     // cumulative wait across retries
 
         for (int attempt = 0; attempt <= maxRetries; attempt++) {
             HttpResponse<String> response = sendIntrospectionRequest(token);
@@ -78,22 +86,26 @@ public class IntrospectionClient {
                     );
                 }
 
-                // Compute wait: honor Retry-After header, or use exponential backoff
-                long waitMs = retryAfter >= 0
-                    ? (long)(retryAfter * 1000)
-                    : Math.min(delayMs, 30_000L);
+                // Compute wait: Retry-After beats exponential backoff, but both
+                // are capped — Retry-After is untrusted server input and must
+                // not pin the caller.
+                long requestedMs = retryAfter >= 0 ? (long)(retryAfter * 1000) : delayMs;
+                long waitMs = Math.min(Math.max(0L, requestedMs), MAX_RETRY_WAIT_MS);
                 long jitterMs = ThreadLocalRandom.current().nextLong(0, 500);
                 long totalWaitMs = waitMs + jitterMs;
+
+                if (waitedMs + totalWaitMs > MAX_RETRY_BUDGET_MS) {
+                    throw new AgentAdmitException.RateLimitError(
+                        "AgentAdmit rate limit retry budget (" + (MAX_RETRY_BUDGET_MS / 1000) + "s) exhausted.",
+                        retryAfter, rlLimit, rlRemaining, rlReset
+                    );
+                }
+                waitedMs += totalWaitMs;
 
                 logger.warn("AgentAdmit introspection rate-limited (attempt {}/{}). Retrying in {}ms.",
                     attempt + 1, maxRetries, totalWaitMs);
 
-                try {
-                    Thread.sleep(totalWaitMs);
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
-                    throw new AgentAdmitException("Interrupted while retrying after rate limit", 429);
-                }
+                sleepBeforeRetry(totalWaitMs);
 
                 delayMs = Math.min(delayMs * 2, 30_000L);
                 continue;
@@ -107,21 +119,18 @@ public class IntrospectionClient {
                     throw new AgentAdmitException(desc, 401);
                 }
 
-                if (status != 200) {
+                if (status < 200 || status > 299) {
                     throw new AgentAdmitException("Verification service returned " + status, 502);
                 }
 
                 Map<String, Object> data = objectMapper.readValue(response.body(), Map.class);
 
                 // Check active flag (RFC 7662 introspection pattern).
-                // The verify endpoint returns {active: false} with HTTP 200 for
-                // invalid/expired/revoked tokens; the error code is one of
-                // invalid_token, token_expired, token_revoked, connection_revoked,
-                // connection_expired, or environment_mismatch. Unknown codes pass
-                // through unchanged. Without this check, we'd read empty scopes.
-                Boolean active = (Boolean) data.get("active");
-                if (active == null || !active) {
-                    String reason = (String) data.getOrDefault("error", "invalid_token");
+                // active must be strictly Boolean true — null, false, or a
+                // non-boolean value all mean the token is invalid/expired/revoked.
+                Object activeRaw = data.get("active");
+                if (!Boolean.TRUE.equals(activeRaw)) {
+                    String reason = (data.get("error") instanceof String s) ? s : "invalid_token";
                     throw new AgentAdmitException("Token is not active: " + reason, 401);
                 }
 
@@ -132,15 +141,20 @@ public class IntrospectionClient {
                     throw new AgentAdmitException(desc, 403);
                 }
 
-                String userId = (String) data.get("user_id");
-                String connectionId = (String) data.get("connection_id");
-                @SuppressWarnings("unchecked")
-                List<String> scopes = (List<String>) data.getOrDefault("scopes", List.of());
+                // Validate that string fields are actually strings when present
+                // (not numbers, booleans, or objects), and that scopes is a list
+                // of strings. A well-formed response from the hosted service will
+                // always satisfy these; mismatches indicate a spoofed or
+                // malformed response that must be rejected.
+                String userId = requireStringField(data, "user_id");
+                String agentId = requireStringFieldIfPresent(data, "agent_id");
+                String connectionId = requireStringFieldIfPresent(data, "connection_id");
+                List<String> scopes = requireStringList(data, "scopes");
                 String agentLabel = (String) data.getOrDefault("agent_label", "Unknown Agent");
-                String sub = (String) data.get("sub");
-                String role = (String) data.get("role");
-                String appId = (String) data.get("app_id");
-                String jti = (String) data.get("jti");
+                String sub = requireStringFieldIfPresent(data, "sub");
+                String role = requireStringFieldIfPresent(data, "role");
+                String appId = requireStringFieldIfPresent(data, "app_id");
+                String jti = requireStringFieldIfPresent(data, "jti");
                 long exp = data.get("exp") instanceof Number n ? n.longValue() : 0L;
 
                 if (userId == null) {
@@ -164,7 +178,18 @@ public class IntrospectionClient {
     // Private helpers
     // -------------------------------------------------------------------------
 
-    private HttpResponse<String> sendIntrospectionRequest(String token) throws AgentAdmitException {
+    /** Sleep before the next retry. Package-visible so tests can record instead of sleeping. */
+    void sleepBeforeRetry(long totalWaitMs) throws AgentAdmitException {
+        try {
+            Thread.sleep(totalWaitMs);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            throw new AgentAdmitException("Interrupted while retrying after rate limit", 429);
+        }
+    }
+
+    /** Package-visible so tests can stub the hosted-service response. */
+    HttpResponse<String> sendIntrospectionRequest(String token) throws AgentAdmitException {
         try {
             // Serialize via Jackson — string concatenation would allow JSON
             // injection through a hostile token value.
@@ -181,6 +206,57 @@ public class IntrospectionClient {
             logger.error("AgentAdmit introspection network error: {}", e.getMessage());
             throw new AgentAdmitException("Introspection failed: " + e.getMessage(), 502);
         }
+    }
+
+    /**
+     * Require that {@code field} is a String value, or null if absent.
+     * Returns the String value, or null if the field is absent.
+     * Throws if the field is present but not a String.
+     */
+    private String requireStringField(Map<String, Object> data, String field) throws AgentAdmitException {
+        Object val = data.get(field);
+        if (val == null) return null;
+        if (!(val instanceof String)) {
+            throw new AgentAdmitException(
+                "Introspection response field '" + field + "' must be a string, got: "
+                + val.getClass().getSimpleName(), 401);
+        }
+        return (String) val;
+    }
+
+    /**
+     * Same as {@link #requireStringField} but does not require the field to be present.
+     * Equivalent to requireStringField — both return null when absent, both throw when
+     * present-but-wrong-type.
+     */
+    private String requireStringFieldIfPresent(Map<String, Object> data, String field)
+            throws AgentAdmitException {
+        return requireStringField(data, field);
+    }
+
+    /**
+     * Require that {@code scopes} field is a list of strings, or absent (defaults to empty list).
+     * Throws if the field is present but is not a list, or contains non-string elements.
+     */
+    @SuppressWarnings("unchecked")
+    private List<String> requireStringList(Map<String, Object> data, String field)
+            throws AgentAdmitException {
+        Object val = data.get(field);
+        if (val == null) return List.of();
+        if (!(val instanceof List)) {
+            throw new AgentAdmitException(
+                "Introspection response field '" + field + "' must be a list of strings, got: "
+                + val.getClass().getSimpleName(), 401);
+        }
+        List<?> list = (List<?>) val;
+        for (Object item : list) {
+            if (!(item instanceof String)) {
+                throw new AgentAdmitException(
+                    "Introspection response field '" + field + "' must contain only strings, got element: "
+                    + (item == null ? "null" : item.getClass().getSimpleName()), 401);
+            }
+        }
+        return (List<String>) list;
     }
 
     /** Returns the header value as a double, or -1 if absent/invalid. */
