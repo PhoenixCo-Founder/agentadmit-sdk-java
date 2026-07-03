@@ -73,8 +73,13 @@ public class AgentAdmitFilter implements Filter {
         HttpServletRequest httpReq = (HttpServletRequest) request;
         String auth = httpReq.getHeader("Authorization");
 
-        if (auth != null && auth.startsWith("Bearer " + config.getTokenPrefixAccess())) {
-            String token = auth.substring(7); // Remove "Bearer "
+        // RFC 7235: auth-scheme is case-insensitive, so match "bearer" in any
+        // casing. The ag_at_ token prefix that follows remains case-sensitive.
+        if (auth != null
+                && auth.length() > 7
+                && auth.substring(0, 7).equalsIgnoreCase("Bearer ")
+                && auth.substring(7).startsWith(config.getTokenPrefixAccess())) {
+            String token = auth.substring(7); // Remove "Bearer " (any casing)
 
             try {
                 IntrospectionClient.IntrospectionResult result = introspectionClient.verify(token);

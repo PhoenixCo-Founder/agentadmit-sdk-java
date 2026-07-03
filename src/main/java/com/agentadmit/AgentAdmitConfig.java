@@ -8,11 +8,15 @@ package com.agentadmit;
  */
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
-import org.springframework.stereotype.Component;
 
 /**
  * AgentAdmit configuration loaded from application.yml/properties.
- * 
+ *
+ * <p>Registered as a Spring bean via
+ * {@code @EnableConfigurationProperties(AgentAdmitConfig.class)} in
+ * {@link AgentAdmitAutoConfiguration}. Do not add {@code @Component} here;
+ * let the auto-configuration own registration so there is exactly one bean.
+ *
  * agentadmit:
  *   app-id: "app_abc123"
  *   api-key: "aa_live_xxxx"
@@ -20,7 +24,6 @@ import org.springframework.stereotype.Component;
  *   api-url: "https://api.agentadmit.com"
  *   user-lookup-field: "userId"
  */
-@Component
 @ConfigurationProperties(prefix = "agentadmit")
 public class AgentAdmitConfig {
 
@@ -85,9 +88,17 @@ public class AgentAdmitConfig {
     public String getVerifyUrl() { return verifyUrl; }
     /**
      * Set the token verification endpoint URL.
+     * Non-HTTPS URLs are rejected unless the host is {@code localhost},
+     * {@code 127.0.0.1}, or {@code [::1]} (plain HTTP on loopback is allowed
+     * for local development).
+     *
      * @param verifyUrl the verify URL
+     * @throws IllegalArgumentException if the URL is not HTTPS (except on loopback)
      */
-    public void setVerifyUrl(String verifyUrl) { this.verifyUrl = verifyUrl; }
+    public void setVerifyUrl(String verifyUrl) {
+        requireHttpsOrLoopback(verifyUrl, "verifyUrl");
+        this.verifyUrl = verifyUrl;
+    }
 
     /**
      * Get the base API URL.
@@ -96,9 +107,57 @@ public class AgentAdmitConfig {
     public String getApiUrl() { return apiUrl; }
     /**
      * Set the base API URL.
+     * Non-HTTPS URLs are rejected unless the host is {@code localhost},
+     * {@code 127.0.0.1}, or {@code [::1]} (plain HTTP on loopback is allowed
+     * for local development).
+     *
      * @param apiUrl the API base URL
+     * @throws IllegalArgumentException if the URL is not HTTPS (except on loopback)
      */
-    public void setApiUrl(String apiUrl) { this.apiUrl = apiUrl; }
+    public void setApiUrl(String apiUrl) {
+        requireHttpsOrLoopback(apiUrl, "apiUrl");
+        this.apiUrl = apiUrl;
+    }
+
+    // -------------------------------------------------------------------------
+    // Private helpers
+    // -------------------------------------------------------------------------
+
+    /**
+     * Require that a URL is HTTPS, or HTTP only when the host is a loopback
+     * address ({@code localhost}, {@code 127.0.0.1}, or {@code [::1]}).
+     *
+     * @param url   the URL to validate
+     * @param field the configuration field name (for the error message)
+     * @throws IllegalArgumentException if the URL scheme is http for a non-loopback host
+     */
+    private static void requireHttpsOrLoopback(String url, String field) {
+        if (url == null || url.isEmpty()) {
+            return; // let other validators handle blank values
+        }
+        if (url.startsWith("https://")) {
+            return; // always allowed
+        }
+        if (url.startsWith("http://")) {
+            // Only loopback hosts may use plain HTTP.
+            String lower = url.toLowerCase();
+            if (lower.startsWith("http://localhost")
+                    || lower.startsWith("http://127.0.0.1")
+                    || lower.startsWith("http://[::1]")) {
+                return;
+            }
+            throw new IllegalArgumentException(
+                "AgentAdmit configuration error: " + field
+                + " must use HTTPS. Plain HTTP is only permitted for loopback addresses"
+                + " (localhost, 127.0.0.1, [::1]). Got: " + url
+            );
+        }
+        // Any other scheme (ftp://, custom://, etc.) is also rejected.
+        throw new IllegalArgumentException(
+            "AgentAdmit configuration error: " + field
+            + " must be an HTTPS URL. Got: " + url
+        );
+    }
 
     /**
      * Get the access token prefix.
