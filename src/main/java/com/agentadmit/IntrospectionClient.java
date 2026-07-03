@@ -23,6 +23,13 @@ import java.util.concurrent.ThreadLocalRandom;
 public class IntrospectionClient {
 
     private static final Logger logger = LoggerFactory.getLogger(IntrospectionClient.class);
+
+    /** Hard cap (ms) on any single retry wait — including a server-supplied Retry-After. */
+    static final long MAX_RETRY_WAIT_MS = 30_000L;
+
+    /** Hard cap (ms) on cumulative wait across all retries of a single verify call. */
+    static final long MAX_RETRY_BUDGET_MS = 120_000L;
+
     private final AgentAdmitConfig config;
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
@@ -57,7 +64,8 @@ public class IntrospectionClient {
         }
 
         int maxRetries = config.getMaxRetries();
-        long delayMs = 1_000L; // initial backoff: 1 second
+        long delayMs = 1_000L;  // initial backoff: 1 second
+        long waitedMs = 0L;     // cumulative wait across retries
 
         for (int attempt = 0; attempt <= maxRetries; attempt++) {
             HttpResponse<String> response = sendIntrospectionRequest(token);
@@ -78,22 +86,26 @@ public class IntrospectionClient {
                     );
                 }
 
-                // Compute wait: honor Retry-After header, or use exponential backoff
-                long waitMs = retryAfter >= 0
-                    ? (long)(retryAfter * 1000)
-                    : Math.min(delayMs, 30_000L);
+                // Compute wait: Retry-After beats exponential backoff, but both
+                // are capped — Retry-After is untrusted server input and must
+                // not pin the caller.
+                long requestedMs = retryAfter >= 0 ? (long)(retryAfter * 1000) : delayMs;
+                long waitMs = Math.min(Math.max(0L, requestedMs), MAX_RETRY_WAIT_MS);
                 long jitterMs = ThreadLocalRandom.current().nextLong(0, 500);
                 long totalWaitMs = waitMs + jitterMs;
+
+                if (waitedMs + totalWaitMs > MAX_RETRY_BUDGET_MS) {
+                    throw new AgentAdmitException.RateLimitError(
+                        "AgentAdmit rate limit retry budget (" + (MAX_RETRY_BUDGET_MS / 1000) + "s) exhausted.",
+                        retryAfter, rlLimit, rlRemaining, rlReset
+                    );
+                }
+                waitedMs += totalWaitMs;
 
                 logger.warn("AgentAdmit introspection rate-limited (attempt {}/{}). Retrying in {}ms.",
                     attempt + 1, maxRetries, totalWaitMs);
 
-                try {
-                    Thread.sleep(totalWaitMs);
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
-                    throw new AgentAdmitException("Interrupted while retrying after rate limit", 429);
-                }
+                sleepBeforeRetry(totalWaitMs);
 
                 delayMs = Math.min(delayMs * 2, 30_000L);
                 continue;
@@ -164,7 +176,18 @@ public class IntrospectionClient {
     // Private helpers
     // -------------------------------------------------------------------------
 
-    private HttpResponse<String> sendIntrospectionRequest(String token) throws AgentAdmitException {
+    /** Sleep before the next retry. Package-visible so tests can record instead of sleeping. */
+    void sleepBeforeRetry(long totalWaitMs) throws AgentAdmitException {
+        try {
+            Thread.sleep(totalWaitMs);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            throw new AgentAdmitException("Interrupted while retrying after rate limit", 429);
+        }
+    }
+
+    /** Package-visible so tests can stub the hosted-service response. */
+    HttpResponse<String> sendIntrospectionRequest(String token) throws AgentAdmitException {
         try {
             // Serialize via Jackson — string concatenation would allow JSON
             // injection through a hostile token value.
