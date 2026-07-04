@@ -161,7 +161,15 @@ public class IntrospectionClient {
                     throw new AgentAdmitException("Introspection returned no user", 401);
                 }
 
-                return new IntrospectionResult(userId, connectionId, scopes, agentLabel, sub, role, appId, jti, exp);
+                Map<String, Object> consent = null;
+                if (data.get("consent") instanceof Map<?, ?> consentMap
+                        && consentMap.get("granted") instanceof Boolean) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> cast = (Map<String, Object>) consentMap;
+                    consent = cast;
+                }
+
+                return new IntrospectionResult(userId, connectionId, scopes, agentLabel, sub, role, appId, jti, exp, consent);
             } catch (AgentAdmitException e) {
                 throw e;
             } catch (Exception e) {
@@ -292,6 +300,7 @@ public class IntrospectionClient {
      * @param appId        the AgentAdmit application identifier
      * @param jti          unique JWT ID of the access token
      * @param exp          token expiry as a Unix timestamp (0 if absent)
+     * @param consent      Consent Ledger verdict for the external-agent path (null if absent)
      */
     public record IntrospectionResult(
         String userId,
@@ -302,7 +311,8 @@ public class IntrospectionClient {
         String role,
         String appId,
         String jti,
-        long exp
+        long exp,
+        Map<String, Object> consent
     ) {
         /**
          * Check whether a specific scope was granted.
@@ -312,6 +322,20 @@ public class IntrospectionClient {
          */
         public boolean hasScope(String scope) {
             return scopes.contains(scope);
+        }
+
+        /**
+         * Consent Ledger verdict for the external-agent path (additive; may
+         * be {@code null}). A denied verdict means the app returns its own
+         * 403 — the token itself stays valid (consent is orthogonal to
+         * revocation).
+         *
+         * @return {@code false} only when a verdict is present and denied
+         */
+        public boolean consentGranted() {
+            if (consent == null) return true;
+            Object granted = consent.get("granted");
+            return !(granted instanceof Boolean b) || b;
         }
     }
 }
