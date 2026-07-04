@@ -161,9 +161,12 @@ public class IntrospectionClient {
                     throw new AgentAdmitException("Introspection returned no user", 401);
                 }
 
+                // Keep the consent map whenever it is present, even if its
+                // "granted" field is missing or mistyped. consentGranted()
+                // treats a present-but-malformed verdict as denied (fail
+                // closed); only a fully absent map means a legacy server.
                 Map<String, Object> consent = null;
-                if (data.get("consent") instanceof Map<?, ?> consentMap
-                        && consentMap.get("granted") instanceof Boolean) {
+                if (data.get("consent") instanceof Map<?, ?> consentMap) {
                     @SuppressWarnings("unchecked")
                     Map<String, Object> cast = (Map<String, Object>) consentMap;
                     consent = cast;
@@ -326,16 +329,19 @@ public class IntrospectionClient {
 
         /**
          * Consent Ledger verdict for the external-agent path (additive; may
-         * be {@code null}). A denied verdict means the app returns its own
-         * 403 — the token itself stays valid (consent is orthogonal to
-         * revocation).
+         * be {@code null}). An absent consent map means a legacy server that
+         * does not emit a verdict, so the request is allowed. A denied
+         * verdict means the app returns its own 403; the token itself stays
+         * valid (consent is orthogonal to revocation). A verdict that is
+         * present but whose {@code granted} field is missing or not a
+         * boolean is treated as denied (fail closed).
          *
-         * @return {@code false} only when a verdict is present and denied
+         * @return {@code true} when consent is absent or {@code granted} is
+         *         {@code Boolean.TRUE}; {@code false} otherwise
          */
         public boolean consentGranted() {
             if (consent == null) return true;
-            Object granted = consent.get("granted");
-            return !(granted instanceof Boolean b) || b;
+            return Boolean.TRUE.equals(consent.get("granted"));
         }
     }
 }

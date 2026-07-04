@@ -90,7 +90,7 @@ public class ConsentClient {
                 .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)))
                 .timeout(Duration.ofSeconds(10))
                 .build();
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> response = sendConsentRequest(request);
             if (response.statusCode() >= 400) {
                 logger.error("AgentAdmit checkConsent returned {}", response.statusCode());
                 throw new AgentAdmitException("checkConsent failed", response.statusCode());
@@ -104,5 +104,10 @@ public class ConsentClient {
             logger.error("AgentAdmit checkConsent failed: {}", e.getMessage());
             throw new AgentAdmitException("checkConsent failed", 502);
         }
+    }
+
+    /** Package-visible so tests can stub the hosted-service response. */
+    HttpResponse<String> sendConsentRequest(HttpRequest request) throws Exception {
+        return httpClient.send(request, HttpResponse.BodyHandlers.ofString());
     }
 }
