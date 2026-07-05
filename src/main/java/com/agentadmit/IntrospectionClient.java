@@ -172,7 +172,14 @@ public class IntrospectionClient {
                     consent = cast;
                 }
 
-                return new IntrospectionResult(userId, connectionId, scopes, agentLabel, sub, role, appId, jti, exp, consent);
+                // Human-presence fact rides along when the platform returns
+                // it. Same strictness as active: verified must be strictly
+                // boolean, never coerced. Absent or malformed blocks leave
+                // presence null (older servers omit it entirely);
+                // isPresenceVerified() then reports false (fail closed).
+                Presence presence = Presence.fromVerifyData(data.get("presence"));
+
+                return new IntrospectionResult(userId, connectionId, scopes, agentLabel, sub, role, appId, jti, exp, consent, presence);
             } catch (AgentAdmitException e) {
                 throw e;
             } catch (Exception e) {
@@ -304,6 +311,7 @@ public class IntrospectionClient {
      * @param jti          unique JWT ID of the access token
      * @param exp          token expiry as a Unix timestamp (0 if absent)
      * @param consent      Consent Ledger verdict for the external-agent path (null if absent)
+     * @param presence     human-presence fact for the connection (null if absent or malformed)
      */
     public record IntrospectionResult(
         String userId,
@@ -315,7 +323,8 @@ public class IntrospectionClient {
         String appId,
         String jti,
         long exp,
-        Map<String, Object> consent
+        Map<String, Object> consent,
+        Presence presence
     ) {
         /**
          * Check whether a specific scope was granted.
@@ -342,6 +351,23 @@ public class IntrospectionClient {
         public boolean consentGranted() {
             if (consent == null) return true;
             return Boolean.TRUE.equals(consent.get("granted"));
+        }
+
+        /**
+         * Whether the connection behind this token was authorized by a human
+         * who completed a presence ceremony (WebAuthn) on the consent page.
+         *
+         * <p>Strict, and the opposite posture from
+         * {@link #consentGranted()}: absent presence data is NOT verified.
+         * Only a well-formed block whose {@code verified} field is
+         * {@code Boolean.TRUE} counts, so connections from servers that
+         * predate the presence feature report {@code false} (fail closed).
+         *
+         * @return {@code true} only when {@code presence} is non-null and
+         *         its {@code verified} field is {@code Boolean.TRUE}
+         */
+        public boolean isPresenceVerified() {
+            return presence != null && Boolean.TRUE.equals(presence.verified());
         }
     }
 }

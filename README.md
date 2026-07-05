@@ -90,6 +90,29 @@ if (Boolean.FALSE.equals(verdict.get("granted"))) {
 
 Consent is orthogonal to revocation: a denied verdict means your app returns its own 403; the connection and token stay valid so the user can flip consent back on without re-connecting. Write switches through `PUT /api/v1/consent/settings` from your backend; export the audit trail with `GET /api/v1/consent/export` (every plan).
 
+## Presence Verification (WebAuthn Step-Up)
+
+The verify result can carry a `presence` block stating whether the human who authorized the connection completed a WebAuthn presence ceremony on the consent page. Older servers omit it, and connections minted without a ceremony arrive with `verified: false`. Check it on the introspection result:
+
+```java
+IntrospectionClient.IntrospectionResult result = introspectionClient.verify(token);
+if (!result.isPresenceVerified()) {
+    // the connection was not authorized with a completed presence ceremony
+}
+```
+
+`isPresenceVerified()` is strict and fails closed: it returns `true` only when the block is present and `verified` is a real boolean `true`. Absent, unverified, or malformed presence data all read as not verified, so responses from servers that predate the feature never pass.
+
+For sensitive endpoints, enforce it declaratively the same way you enforce scopes:
+
+```java
+@PostMapping("/api/payments")
+@RequirePresence
+public Receipt createPayment(...) { ... }
+```
+
+Requests without an agent token get a 401 (matching `@RequireScope`); agent requests whose connection lacks a completed ceremony get a 403 `presence_required`. The raw `Presence` record (`verified`, `method`, `uv`, `verifiedAt`) is also available via `result.presence()` and the `agentadmit.presence` request attribute.
+
 ## Rate Limiting
 
 The AgentAdmit introspection endpoint enforces rate limits. The Java SDK handles HTTP 429 responses **automatically** with exponential backoff and jitter  --  no changes needed in your filter or aspect code.

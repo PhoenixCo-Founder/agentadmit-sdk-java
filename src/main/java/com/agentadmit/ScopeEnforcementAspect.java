@@ -14,7 +14,9 @@ import java.util.List;
 /**
  * AOP aspect that intercepts methods annotated with {@link RequireScope} or
  * {@link RequireScopeIfAgent} and enforces scope requirements against the
- * scopes granted in the validated AgentAdmit token.
+ * scopes granted in the validated AgentAdmit token. Also intercepts
+ * {@link RequirePresence} and enforces human-presence verification on the
+ * validated connection.
  */
 @Aspect
 @Component
@@ -69,6 +71,49 @@ public class ScopeEnforcementAspect {
         }
 
         return checkScopeAndProceed(joinPoint, requireScopeIfAgent.value(), request);
+    }
+
+    /**
+     * Enforce human-presence verification on methods annotated with
+     * {@link RequirePresence}. Returns 401 if no agent token is present
+     * (mirroring {@link RequireScope}), or 403 {@code presence_required}
+     * when the connection was minted without a completed presence
+     * ceremony. Fails closed: absent, unverified, or malformed presence
+     * data all deny, including responses from servers that predate the
+     * presence feature.
+     *
+     * @param joinPoint       the intercepted method invocation
+     * @param requirePresence the annotation marking the guarded method
+     * @return the method result if presence is verified, or {@code null} after writing an error response
+     * @throws Throwable if the underlying method throws
+     */
+    @Around("@annotation(requirePresence)")
+    public Object enforcePresence(ProceedingJoinPoint joinPoint, RequirePresence requirePresence) throws Throwable {
+        HttpServletRequest request = getCurrentRequest();
+        String authType = (String) request.getAttribute("agentadmit.authType");
+
+        if (!"agent".equals(authType)) {
+            // No agent token: return 401, same posture as RequireScope
+            HttpServletResponse response = getCurrentResponse();
+            response.setStatus(401);
+            response.setContentType("application/json");
+            response.getWriter().write("{\"error\":\"invalid_token\",\"error_description\":\"AgentAdmit token required\"}");
+            return null;
+        }
+
+        Object presence = request.getAttribute("agentadmit.presence");
+        if (!(presence instanceof Presence p) || !p.isVerified()) {
+            HttpServletResponse response = getCurrentResponse();
+            response.setStatus(403);
+            response.setContentType("application/json");
+            response.getWriter().write(
+                "{\"error\":\"presence_required\"," +
+                "\"error_description\":\"This action requires a connection authorized with human presence verification.\"}"
+            );
+            return null;
+        }
+
+        return joinPoint.proceed();
     }
 
     @SuppressWarnings("unchecked")

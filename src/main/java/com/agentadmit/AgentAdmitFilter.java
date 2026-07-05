@@ -39,6 +39,7 @@ import java.io.IOException;
  *   agentadmit.scopes    — granted scopes
  *   agentadmit.connectionId — connection identifier
  *   agentadmit.agentLabel   — agent display name
+ *   agentadmit.presence     -- {@link Presence} fact for the connection (null when absent)
  */
 @Component
 public class AgentAdmitFilter implements Filter {
@@ -89,6 +90,7 @@ public class AgentAdmitFilter implements Filter {
                 httpReq.setAttribute("agentadmit.scopes", result.scopes());
                 httpReq.setAttribute("agentadmit.connectionId", result.connectionId());
                 httpReq.setAttribute("agentadmit.agentLabel", result.agentLabel());
+                httpReq.setAttribute("agentadmit.presence", result.presence());
 
                 logger.debug("AgentAdmit: validated agent token for user={} scopes={}", 
                     result.userId(), result.scopes());
