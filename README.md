@@ -90,6 +90,25 @@ if (Boolean.FALSE.equals(verdict.get("granted"))) {
 
 Consent is orthogonal to revocation: a denied verdict means your app returns its own 403; the connection and token stay valid so the user can flip consent back on without re-connecting. Write switches through `PUT /api/v1/consent/settings` from your backend; export the audit trail with `GET /api/v1/consent/export` (every plan).
 
+**One-filter drop-in.** Instead of wiring the three paths by hand, `CallerConsentFilter` classifies the caller from the credential and evaluates the right independent path:
+
+```java
+CallerConsentFilter filter = new CallerConsentFilter(
+    config, introspectionClient, consentClient,
+    new CallerConsentFilter.Options(
+        req -> req.getParameter("ownerId"),                       // resolveDataOwnerId
+        req -> INTERNAL_SECRET.equals(req.getHeader("x-internal-ai"))
+            ? "in_app_ai" : "human_session",                      // classifyNonAgent (credential structure, never caller input)
+        "read:records",                                           // requiredScope (external agents)
+        null,                                                     // scopeGroup
+        false));                                                  // gateHuman
+// Register after your own authentication filter. Downstream handlers read
+// request attributes: agentadmit.callerClass, agentadmit.consent, and the
+// standard agent attributes on the external-agent path.
+```
+
+External agents are checked via hosted introspection (consent verdict plus scope); in-app AI via the Consent Ledger (fail closed); the human path defers to your own permission model unless `gateHuman` is true. It is a consent gate, not an authenticator, so register it after your own authentication.
+
 ## Presence Verification (WebAuthn Step-Up)
 
 The verify result can carry a `presence` block stating whether the human who authorized the connection completed a WebAuthn presence ceremony on the consent page. Older servers omit it, and connections minted without a ceremony arrive with `verified: false`. Check it on the introspection result:

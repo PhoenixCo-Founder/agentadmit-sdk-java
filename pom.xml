@@ -63,6 +63,15 @@
             <scope>test</scope>
         </dependency>
         <dependency>
+            <!-- Mock servlet classes (MockHttpServletRequest/Response, MockFilterChain)
+                 for filter tests. 6.1.1 = the Spring Framework release paired with
+                 Boot 3.2.0. Test scope only. -->
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-test</artifactId>
+            <version>6.1.1</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
             <groupId>org.assertj</groupId>
             <artifactId>assertj-core</artifactId>
             <version>3.25.1</version>
