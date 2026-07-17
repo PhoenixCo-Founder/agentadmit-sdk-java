@@ -78,6 +78,8 @@ if (!result.consentGranted()) {
 }
 ```
 
+`consentGranted()` fails closed: an absent or malformed verdict is never a grant. The hosted service deliberately omits the consent block when its consent-store read fails (degraded mode), so when `result.consent()` is null, resolve the verdict through `ConsentClient.checkConsent(owner, ConsentClient.CALLER_CLASS_EXTERNAL_AGENT, scopeGroup)` before serving the request — `CallerConsentFilter` does this automatically.
+
 **Human sessions and in-app AI** never hold AgentAdmit tokens, so ask directly:
 
 ```java
@@ -107,7 +109,7 @@ CallerConsentFilter filter = new CallerConsentFilter(
 // standard agent attributes on the external-agent path.
 ```
 
-External agents are checked via hosted introspection (consent verdict plus scope); in-app AI via the Consent Ledger (fail closed); the human path defers to your own permission model unless `gateHuman` is true. It is a consent gate, not an authenticator, so register it after your own authentication.
+External agents are checked via hosted introspection — the consent verdict is evaluated BEFORE the scope check, so a denied class never learns scope state, and an absent or malformed verdict is resolved through the Consent Ledger (fail closed; absence is never a grant); in-app AI via the Consent Ledger (fail closed); the human path defers to your own permission model unless `gateHuman` is true. It is a consent gate, not an authenticator, so register it after your own authentication.
 
 ## Presence Verification (WebAuthn Step-Up)
 

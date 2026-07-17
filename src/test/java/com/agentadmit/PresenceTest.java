@@ -33,8 +33,8 @@ import static org.junit.jupiter.api.Assertions.*;
  *     mirrors the active flag: verified must be strictly boolean)
  *
  * isPresenceVerified() must be strict and fail closed: only a present block
- * with verified Boolean.TRUE counts. This is the OPPOSITE posture from
- * consentGranted(), where absence means a legacy server and is allowed.
+ * with verified Boolean.TRUE counts. This matches consentGranted(), which
+ * also fails closed — an absent or malformed verdict is never a grant.
  *
  * The @RequirePresence guard must return 401 without an agent token
  * (mirroring @RequireScope) and 403 presence_required when the connection
@@ -188,7 +188,7 @@ class PresenceTest {
 
     @Test
     void presenceAbsentIsNotVerified() {
-        // Fail closed: absence denies, the opposite posture from consentGranted()
+        // Fail closed: absence denies, matching consentGranted()'s posture
         assertFalse(resultWithPresence(null).isPresenceVerified());
     }
 

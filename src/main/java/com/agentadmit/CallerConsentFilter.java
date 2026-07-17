@@ -34,7 +34,10 @@ import java.util.function.Function;
  * <ul>
  *   <li><b>external_agent</b> — an {@code ag_at_} access token: hosted
  *       introspection returns the external-agent consent verdict inline plus
- *       the granted scopes. Enforced here directly.</li>
+ *       the granted scopes. Consent is evaluated BEFORE scope (a denied
+ *       class must not learn scope state or step-up guidance). A missing or
+ *       malformed verdict is resolved through the Consent Ledger, fail
+ *       closed — absence is never a grant.</li>
  *   <li><b>in_app_ai</b> — your application's own server-side AI code path:
  *       the Consent Ledger {@code /consent/check} for the in-app-AI class.</li>
  *   <li><b>human_session</b> — your application's own permission model
@@ -175,6 +178,36 @@ public class CallerConsentFilter implements Filter {
                 return;
             }
 
+            // Consent first (Patent FIG. 3: the class consent decision precedes
+            // scope evaluation). Checking scope first leaked granted-scope state
+            // and step-up guidance to callers whose class the owner had denied.
+            // The hosted service omits the verdict when its consent-store read
+            // fails (designed degraded mode), so an absent or malformed verdict
+            // is resolved through the Consent Ledger — never treated as a grant.
+            Map<String, Object> consent = result.consent();
+            if (consent == null || !(consent.get("granted") instanceof Boolean)) {
+                String owner = result.userId();
+                if (owner == null || owner.isEmpty()) {
+                    writeError(httpResp, 503, "consent_unavailable",
+                        "introspection carried no consent verdict and no resolvable data owner");
+                    return;
+                }
+                try {
+                    consent = consentClient.checkConsent(
+                        owner, CALLER_CLASS_EXTERNAL_AGENT, options.scopeGroup());
+                } catch (Exception e) {
+                    // Fail closed: an unreachable or erroring ledger denies, never allows.
+                    logger.warn("Consent Ledger unavailable for external_agent fallback: {}", e.getMessage());
+                    writeError(httpResp, 503, "consent_unavailable", "Consent check failed");
+                    return;
+                }
+            }
+            if (!Boolean.TRUE.equals(consent.get("granted"))) {
+                writeError(httpResp, 403, "consent_not_granted",
+                    "The data owner has not enabled external agent access.");
+                return;
+            }
+
             if (options.requiredScope() != null) {
                 List<String> granted = result.scopes() == null ? List.of() : result.scopes();
                 if (!granted.contains(options.requiredScope())) {
@@ -184,23 +217,13 @@ public class CallerConsentFilter implements Filter {
                 }
             }
 
-            // consentGranted() fails closed on a present-but-malformed verdict;
-            // an absent verdict means the platform default (allowed) held.
-            if (!result.consentGranted()) {
-                writeError(httpResp, 403, "consent_not_granted",
-                    "The data owner has not enabled external agent access.");
-                return;
-            }
-
             httpReq.setAttribute("agentadmit.authType", "agent");
             httpReq.setAttribute("agentadmit.userId", result.userId());
             httpReq.setAttribute("agentadmit.scopes", result.scopes());
             httpReq.setAttribute("agentadmit.connectionId", result.connectionId());
             httpReq.setAttribute("agentadmit.agentLabel", result.agentLabel());
             httpReq.setAttribute("agentadmit.presence", result.presence());
-            if (result.consent() != null) {
-                httpReq.setAttribute("agentadmit.consent", result.consent());
-            }
+            httpReq.setAttribute("agentadmit.consent", consent);
             chain.doFilter(request, response);
             return;
         }

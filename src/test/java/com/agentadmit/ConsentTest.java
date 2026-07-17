@@ -18,9 +18,12 @@ import static org.junit.jupiter.api.Assertions.*;
  * Tests for Consent Ledger behavior: ConsentClient.checkConsent parsing and
  * error handling, and the IntrospectionResult.consentGranted() verdict matrix.
  *
- * consentGranted() must fail closed: a consent map that is present but whose
- * "granted" field is missing or not a boolean is treated as denied. Only a
- * fully absent consent map (legacy server that emits no verdict) is allowed.
+ * consentGranted() must fail closed: only a verdict whose "granted" field is
+ * exactly Boolean.TRUE grants. A consent map that is present but malformed
+ * (granted missing or not a boolean) is denied, and a fully absent map is
+ * NEVER a grant — the hosted service omits the block when its consent-store
+ * read fails (degraded mode), so absence is resolved through the Consent
+ * Ledger (as CallerConsentFilter does) or denied.
  */
 class ConsentTest {
 
@@ -152,9 +155,12 @@ class ConsentTest {
     }
 
     @Test
-    void consentAbsentIsGranted() {
-        // Absent consent map = legacy server that emits no verdict = allowed
-        assertTrue(resultWithConsent(null).consentGranted());
+    void consentAbsentIsDenied() {
+        // Absent consent map is NEVER a grant: the hosted service omits the
+        // block when its consent-store read fails (degraded mode). Callers
+        // that need a verdict resolve absence through the Consent Ledger, as
+        // CallerConsentFilter does; consentGranted() itself fails closed.
+        assertFalse(resultWithConsent(null).consentGranted());
     }
 
     @Test
@@ -207,9 +213,13 @@ class ConsentTest {
     }
 
     @Test
-    void verifyWithoutConsentFieldIsGranted() throws Exception {
-        // Legacy server response with no consent key at all
-        assertTrue(verifyWithBody(verifyBodyWithConsent(null)).consentGranted());
+    void verifyWithoutConsentFieldIsDenied() throws Exception {
+        // Degraded-mode/legacy server response with no consent key at all:
+        // never a grant. consent() stays null so a consumer can distinguish
+        // "absent — resolve via the Consent Ledger" from an explicit denial.
+        IntrospectionClient.IntrospectionResult result = verifyWithBody(verifyBodyWithConsent(null));
+        assertNull(result.consent());
+        assertFalse(result.consentGranted());
     }
 
     @Test
