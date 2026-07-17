@@ -1,0 +1,31 @@
+# CI: run the test suite on every push/PR to main.
+#
+# Added alongside the 1.5.1 consent-order fix: publish.yml only runs tests at
+# tag time, so nothing gated pushes or pull requests before this workflow.
+# Action versions are pinned to exact SHAs per supply chain policy.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'maven'
+
+      - name: Run tests
+        run: mvn --batch-mode test

@@ -163,8 +163,11 @@ public class IntrospectionClient {
 
                 // Keep the consent map whenever it is present, even if its
                 // "granted" field is missing or mistyped. consentGranted()
-                // treats a present-but-malformed verdict as denied (fail
-                // closed); only a fully absent map means a legacy server.
+                // fails closed on absent AND malformed verdicts — the hosted
+                // service omits the block when its consent-store read fails
+                // (degraded mode), so absence is never a grant. Consumers
+                // that need a verdict resolve absence through the Consent
+                // Ledger, as CallerConsentFilter does.
                 Map<String, Object> consent = null;
                 if (data.get("consent") instanceof Map<?, ?> consentMap) {
                     @SuppressWarnings("unchecked")
@@ -338,26 +341,29 @@ public class IntrospectionClient {
 
         /**
          * Consent Ledger verdict for the external-agent path (additive; may
-         * be {@code null}). An absent consent map means a legacy server that
-         * does not emit a verdict, so the request is allowed. A denied
-         * verdict means the app returns its own 403; the token itself stays
-         * valid (consent is orthogonal to revocation). A verdict that is
-         * present but whose {@code granted} field is missing or not a
-         * boolean is treated as denied (fail closed).
+         * be {@code null}). Fail closed: only a verdict whose {@code granted}
+         * field is exactly {@code Boolean.TRUE} grants. An absent consent map
+         * is NEVER a grant — the hosted service deliberately omits the block
+         * when its consent-store read fails (degraded mode), so absence must
+         * be resolved through the Consent Ledger
+         * ({@link ConsentClient#checkConsent}), as {@link CallerConsentFilter}
+         * does, or denied. A verdict that is present but whose
+         * {@code granted} field is missing or not a boolean is likewise
+         * denied. A denied verdict means the app returns its own 403; the
+         * token itself stays valid (consent is orthogonal to revocation).
          *
-         * @return {@code true} when consent is absent or {@code granted} is
-         *         {@code Boolean.TRUE}; {@code false} otherwise
+         * @return {@code true} only when {@code consent} is non-null and its
+         *         {@code granted} field is {@code Boolean.TRUE}
          */
         public boolean consentGranted() {
-            if (consent == null) return true;
-            return Boolean.TRUE.equals(consent.get("granted"));
+            return consent != null && Boolean.TRUE.equals(consent.get("granted"));
         }
 
         /**
          * Whether the connection behind this token was authorized by a human
          * who completed a presence ceremony (WebAuthn) on the consent page.
          *
-         * <p>Strict, and the opposite posture from
+         * <p>Strict, matching the fail-closed posture of
          * {@link #consentGranted()}: absent presence data is NOT verified.
          * Only a well-formed block whose {@code verified} field is
          * {@code Boolean.TRUE} counts, so connections from servers that

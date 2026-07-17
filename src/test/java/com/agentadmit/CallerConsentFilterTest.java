@@ -22,10 +22,26 @@ import static org.junit.jupiter.api.Assertions.*;
  * before any consent check; route each class to its OWN isolated path; fail
  * closed on a denied verdict or an unreachable ledger; and never let one
  * class inherit another's decision.
+ *
+ * <p>On the external-agent path the consent verdict is evaluated BEFORE the
+ * scope check (Patent FIG. 3 stage order), so a denied class never learns
+ * scope state; an absent or malformed inline verdict is resolved through the
+ * Consent Ledger, fail closed — absence is never a grant.
  */
 class CallerConsentFilterTest {
 
+    /** Modern hosted response: the consent verdict rides inline. */
     private static final String ACTIVE_BODY =
+        "{\"active\":true,\"user_id\":\"user_1\",\"connection_id\":\"conn_1\","
+            + "\"scopes\":[\"read:things\"],\"agent_label\":\"Test Agent\","
+            + "\"consent\":{\"caller_class\":\"external_agent\",\"granted\":true,\"source\":\"setting\"}}";
+
+    /**
+     * Degraded-mode hosted response: the service omits the consent block when
+     * its consent-store read fails. Absence is never a grant — the filter must
+     * resolve the verdict through the Consent Ledger instead.
+     */
+    private static final String NO_VERDICT_BODY =
         "{\"active\":true,\"user_id\":\"user_1\",\"connection_id\":\"conn_1\","
             + "\"scopes\":[\"read:things\"],\"agent_label\":\"Test Agent\"}";
 
@@ -86,6 +102,49 @@ class CallerConsentFilterTest {
             }
             return response;
         }
+    }
+
+    /**
+     * Records checkConsent arguments so tests can assert the external-agent
+     * ledger fallback asks for the right caller class and owner.
+     */
+    private static class RecordingConsentClient extends ConsentClient {
+        final AtomicInteger calls = new AtomicInteger();
+        volatile String lastAppUserId;
+        volatile String lastCallerClass;
+        volatile String lastScopeGroup;
+        private final Map<String, Object> verdict;
+        private final boolean throwOnCall;
+
+        RecordingConsentClient(Map<String, Object> verdict, boolean throwOnCall) {
+            super(configWith());
+            this.verdict = verdict;
+            this.throwOnCall = throwOnCall;
+        }
+
+        @Override
+        public Map<String, Object> checkConsent(String appUserId, String callerClass, String scopeGroup)
+                throws AgentAdmitException {
+            calls.incrementAndGet();
+            lastAppUserId = appUserId;
+            lastCallerClass = callerClass;
+            lastScopeGroup = scopeGroup;
+            if (throwOnCall) {
+                throw new AgentAdmitException("ledger unreachable", 502);
+            }
+            return verdict;
+        }
+    }
+
+    private static CallerConsentFilter filterWithLedger(
+            HttpResponse<String> verifyResponse,
+            RecordingConsentClient ledger,
+            CallerConsentFilter.Options options) {
+        return new CallerConsentFilter(
+            configWith(),
+            new OneResponseIntrospectionClient(verifyResponse),
+            ledger,
+            options);
     }
 
     private static CallerConsentFilter filter(
@@ -185,15 +244,138 @@ class CallerConsentFilterTest {
     }
 
     @Test
-    void externalAgentAllowsWhenNoConsentBlock() throws Exception {
-        CallerConsentFilter f = filter(stubResponse(200, ACTIVE_BODY), null, CallerConsentFilter.Options.defaults());
+    void externalAgentConsentPrecedesScopeAndLeaksNoScopeState() throws Exception {
+        // Denied verdict AND missing required scope: the caller gets ONLY the
+        // consent denial (Patent FIG. 3 stage order). Scope state and step-up
+        // guidance must never reach a class the owner has denied.
+        String body = "{\"active\":true,\"user_id\":\"user_1\",\"connection_id\":\"conn_1\","
+            + "\"scopes\":[\"read:things\"],\"consent\":{\"caller_class\":\"external_agent\","
+            + "\"granted\":false,\"source\":\"setting\"}}";
+        CallerConsentFilter.Options opts = new CallerConsentFilter.Options(null, null, "write:things", null, false);
+        CallerConsentFilter f = filter(stubResponse(200, body), null, opts);
+        MockHttpServletResponse resp = new MockHttpServletResponse();
+        MockFilterChain chain = new MockFilterChain();
+
+        f.doFilter(agentRequest(), resp, chain);
+
+        assertNull(chain.getRequest());
+        assertEquals(403, resp.getStatus());
+        String content = resp.getContentAsString();
+        assertTrue(content.contains("consent_not_granted"));
+        assertFalse(content.contains("insufficient_scope"), "must not reveal scope state");
+        assertFalse(content.contains("granted_scopes"), "must not reveal granted scopes");
+        assertFalse(content.contains("write:things"), "must not reveal step-up guidance");
+    }
+
+    @Test
+    void externalAgentAbsentVerdictResolvedThroughLedgerAllow() throws Exception {
+        RecordingConsentClient ledger = new RecordingConsentClient(
+            Map.of("caller_class", "external_agent", "granted", Boolean.TRUE, "source", "setting"), false);
+        CallerConsentFilter f = filterWithLedger(
+            stubResponse(200, NO_VERDICT_BODY), ledger, CallerConsentFilter.Options.defaults());
         MockHttpServletRequest req = agentRequest();
         MockFilterChain chain = new MockFilterChain();
 
         f.doFilter(req, new MockHttpServletResponse(), chain);
 
+        assertNotNull(chain.getRequest(), "ledger grant lets the chain continue");
+        assertEquals(1, ledger.calls.get(), "absent verdict must be resolved through the ledger");
+        assertEquals("external_agent", ledger.lastCallerClass);
+        assertEquals("user_1", ledger.lastAppUserId, "owner comes from the introspection result");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> resolved = (Map<String, Object>) req.getAttribute("agentadmit.consent");
+        assertEquals(Boolean.TRUE, resolved.get("granted"), "resolved verdict lands on agentadmit.consent");
+    }
+
+    @Test
+    void externalAgentAbsentVerdictLedgerDenyIs403() throws Exception {
+        RecordingConsentClient ledger = new RecordingConsentClient(
+            Map.of("caller_class", "external_agent", "granted", Boolean.FALSE, "source", "setting"), false);
+        CallerConsentFilter f = filterWithLedger(
+            stubResponse(200, NO_VERDICT_BODY), ledger, CallerConsentFilter.Options.defaults());
+        MockHttpServletResponse resp = new MockHttpServletResponse();
+        MockFilterChain chain = new MockFilterChain();
+
+        f.doFilter(agentRequest(), resp, chain);
+
+        assertNull(chain.getRequest());
+        assertEquals(1, ledger.calls.get());
+        assertEquals(403, resp.getStatus());
+        assertTrue(resp.getContentAsString().contains("consent_not_granted"));
+    }
+
+    @Test
+    void externalAgentAbsentVerdictLedgerErrorFailsClosed503() throws Exception {
+        RecordingConsentClient ledger = new RecordingConsentClient(null, true);
+        CallerConsentFilter f = filterWithLedger(
+            stubResponse(200, NO_VERDICT_BODY), ledger, CallerConsentFilter.Options.defaults());
+        MockHttpServletResponse resp = new MockHttpServletResponse();
+        MockFilterChain chain = new MockFilterChain();
+
+        f.doFilter(agentRequest(), resp, chain);
+
+        assertNull(chain.getRequest(), "an erroring ledger must never allow");
+        assertEquals(503, resp.getStatus());
+        assertTrue(resp.getContentAsString().contains("consent_unavailable"));
+    }
+
+    @Test
+    void externalAgentMalformedVerdictResolvedThroughLedger() throws Exception {
+        // granted:"true" (a string, not a boolean) is malformed — never a
+        // grant; the filter resolves it through the ledger like absence.
+        String body = "{\"active\":true,\"user_id\":\"user_1\",\"connection_id\":\"conn_1\","
+            + "\"scopes\":[\"read:things\"],\"consent\":{\"caller_class\":\"external_agent\","
+            + "\"granted\":\"true\",\"source\":\"setting\"}}";
+        RecordingConsentClient ledger = new RecordingConsentClient(
+            Map.of("caller_class", "external_agent", "granted", Boolean.FALSE, "source", "setting"), false);
+        CallerConsentFilter f = filterWithLedger(
+            stubResponse(200, body), ledger, CallerConsentFilter.Options.defaults());
+        MockHttpServletResponse resp = new MockHttpServletResponse();
+        MockFilterChain chain = new MockFilterChain();
+
+        f.doFilter(agentRequest(), resp, chain);
+
+        assertNull(chain.getRequest());
+        assertEquals(1, ledger.calls.get(), "malformed verdict must be resolved through the ledger");
+        assertEquals("external_agent", ledger.lastCallerClass);
+        assertEquals(403, resp.getStatus());
+        assertTrue(resp.getContentAsString().contains("consent_not_granted"));
+    }
+
+    @Test
+    void externalAgentAbsentVerdictNoResolvableOwnerFailsClosed503() throws Exception {
+        // verify() lets an empty user_id through; with no consent block and no
+        // resolvable owner the filter cannot ask the ledger — fail closed.
+        String body = "{\"active\":true,\"user_id\":\"\",\"connection_id\":\"conn_1\","
+            + "\"scopes\":[\"read:things\"]}";
+        RecordingConsentClient ledger = new RecordingConsentClient(
+            Map.of("granted", Boolean.TRUE), false);
+        CallerConsentFilter f = filterWithLedger(
+            stubResponse(200, body), ledger, CallerConsentFilter.Options.defaults());
+        MockHttpServletResponse resp = new MockHttpServletResponse();
+        MockFilterChain chain = new MockFilterChain();
+
+        f.doFilter(agentRequest(), resp, chain);
+
+        assertNull(chain.getRequest());
+        assertEquals(0, ledger.calls.get(), "no owner to ask the ledger about");
+        assertEquals(503, resp.getStatus());
+        assertTrue(resp.getContentAsString().contains("consent_unavailable"));
+    }
+
+    @Test
+    void externalAgentLedgerFallbackPassesScopeGroup() throws Exception {
+        RecordingConsentClient ledger = new RecordingConsentClient(
+            Map.of("granted", Boolean.TRUE), false);
+        CallerConsentFilter.Options opts = new CallerConsentFilter.Options(
+            null, null, null, "billing", false);
+        CallerConsentFilter f = filterWithLedger(stubResponse(200, NO_VERDICT_BODY), ledger, opts);
+        MockFilterChain chain = new MockFilterChain();
+
+        f.doFilter(agentRequest(), new MockHttpServletResponse(), chain);
+
         assertNotNull(chain.getRequest());
-        assertEquals("external_agent", req.getAttribute("agentadmit.callerClass"));
+        assertEquals("billing", ledger.lastScopeGroup);
     }
 
     @Test
