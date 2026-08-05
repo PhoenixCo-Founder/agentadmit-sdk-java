@@ -155,6 +155,11 @@ public class IntrospectionClient {
                 String role = requireStringFieldIfPresent(data, "role");
                 String appId = requireStringFieldIfPresent(data, "app_id");
                 String jti = requireStringFieldIfPresent(data, "jti");
+                // Declared purpose: the user-facing reason recorded on the
+                // grant at the consent moment. Review-time record only, never
+                // an enforcement input. Same string-typing strictness as the
+                // other fields; absent means null (older servers omit it).
+                String purpose = requireStringFieldIfPresent(data, "purpose");
                 long exp = data.get("exp") instanceof Number n ? n.longValue() : 0L;
 
                 if (userId == null) {
@@ -182,7 +187,7 @@ public class IntrospectionClient {
                 // isPresenceVerified() then reports false (fail closed).
                 Presence presence = Presence.fromVerifyData(data.get("presence"));
 
-                return new IntrospectionResult(userId, connectionId, scopes, agentLabel, sub, role, appId, jti, exp, consent, presence);
+                return new IntrospectionResult(userId, connectionId, scopes, agentLabel, sub, role, appId, jti, exp, consent, presence, purpose);
             } catch (AgentAdmitException e) {
                 throw e;
             } catch (Exception e) {
@@ -315,6 +320,10 @@ public class IntrospectionClient {
      * @param exp          token expiry as a Unix timestamp (0 if absent)
      * @param consent      Consent Ledger verdict for the external-agent path (null if absent)
      * @param presence     human-presence fact for the connection (null if absent or malformed)
+     * @param purpose      declared purpose: the user-facing reason recorded on the
+     *                     grant at the consent moment (null if absent). Review-time
+     *                     record only, never an enforcement input; authorization
+     *                     decisions ride scopes, connection status, and consent.
      */
     public record IntrospectionResult(
         String userId,
@@ -327,7 +336,8 @@ public class IntrospectionClient {
         String jti,
         long exp,
         Map<String, Object> consent,
-        Presence presence
+        Presence presence,
+        String purpose
     ) {
         /**
          * Check whether a specific scope was granted.
