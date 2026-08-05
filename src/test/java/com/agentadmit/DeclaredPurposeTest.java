@@ -30,7 +30,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * Inbound (IntrospectionClient.verify):
  *   - a "purpose" string on the verify response populates result.purpose()
  *   - absent purpose (older servers) reads as null
- *   - a mistyped purpose is rejected like every other string field
+ *   - a mistyped purpose normalizes to null (metadata tolerance, presence-block convention)
  *     (spoofed/malformed response posture)
  */
 class DeclaredPurposeTest {
@@ -197,14 +197,14 @@ class DeclaredPurposeTest {
     }
 
     @Test
-    void mistypedPurposeIsRejected() {
-        // Same strict string typing as user_id/connection_id: a non-string
-        // value indicates a spoofed or malformed response.
+    void mistypedPurposeIsTreatedAsAbsent() throws Exception {
+        // Purpose is metadata, never an enforcement input — it follows the
+        // presence-block tolerance convention (absent or malformed -> null),
+        // not the identity-field strictness. Cross-SDK parity: Node, PHP,
+        // and Ruby normalize a non-string purpose the same way.
         String body = "{\"active\":true,\"user_id\":\"u1\",\"connection_id\":\"conn1\","
             + "\"scopes\":[\"read:orders\"],\"purpose\":42}";
-        AgentAdmitException ex = assertThrows(AgentAdmitException.class,
-            () -> verifyWithBody(body));
-        assertEquals(401, ex.getStatusCode());
-        assertTrue(ex.getMessage().contains("purpose"), "Error should identify the bad field");
+        IntrospectionClient.IntrospectionResult result = verifyWithBody(body);
+        assertNull(result.purpose(), "Malformed purpose must normalize to null, not fail verify");
     }
 }

@@ -157,9 +157,10 @@ public class IntrospectionClient {
                 String jti = requireStringFieldIfPresent(data, "jti");
                 // Declared purpose: the user-facing reason recorded on the
                 // grant at the consent moment. Review-time record only, never
-                // an enforcement input. Same string-typing strictness as the
-                // other fields; absent means null (older servers omit it).
-                String purpose = requireStringFieldIfPresent(data, "purpose");
+                // an enforcement input — so it follows the presence-block
+                // tolerance convention for metadata, not the identity-field
+                // strictness: absent or malformed reads as null.
+                String purpose = data.get("purpose") instanceof String ps ? ps : null;
                 long exp = data.get("exp") instanceof Number n ? n.longValue() : 0L;
 
                 if (userId == null) {
