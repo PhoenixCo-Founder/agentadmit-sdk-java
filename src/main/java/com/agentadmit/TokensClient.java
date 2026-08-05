@@ -123,15 +123,7 @@ public class TokensClient {
     private Map<String, Object> post(String url, Map<String, Object> body, String op)
             throws AgentAdmitException {
         try {
-            HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(url))
-                .header("Authorization", "Bearer " + config.getApiKey())
-                .header("Content-Type", "application/json")
-                .header("X-App-Id", config.getAppId())
-                .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)))
-                .timeout(Duration.ofSeconds(10))
-                .build();
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> response = sendPost(url, objectMapper.writeValueAsString(body));
             if (response.statusCode() >= 400) {
                 logger.error("AgentAdmit {} returned {}", op, response.statusCode());
                 throw new AgentAdmitException(op + " failed", response.statusCode());
@@ -143,6 +135,19 @@ public class TokensClient {
             logger.error("AgentAdmit {} failed: {}", op, e.getMessage());
             throw new AgentAdmitException(op + " failed", 502);
         }
+    }
+
+    /** Package-visible so tests can stub the hosted-service response and capture the outbound body. */
+    HttpResponse<String> sendPost(String url, String jsonBody) throws Exception {
+        HttpRequest request = HttpRequest.newBuilder()
+            .uri(URI.create(url))
+            .header("Authorization", "Bearer " + config.getApiKey())
+            .header("Content-Type", "application/json")
+            .header("X-App-Id", config.getAppId())
+            .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
+            .timeout(Duration.ofSeconds(10))
+            .build();
+        return httpClient.send(request, HttpResponse.BodyHandlers.ofString());
     }
 
     /**
@@ -166,6 +171,32 @@ public class TokensClient {
          */
         public IssueTokenRequestBuilder role(String role) {
             body.put("role", role);
+            return this;
+        }
+
+        /**
+         * Set the declared purpose: the user-facing reason recorded on the
+         * grant at the consent moment. It is a review-time record only, never
+         * an enforcement input — authorization decisions ride scopes,
+         * connection status, and consent.
+         *
+         * <p>When non-null it is included as {@code purpose} in the request
+         * body; when null it is omitted.
+         *
+         * @param purpose the declared purpose (at most 300 characters), or null to omit
+         * @return this builder
+         * @throws IllegalArgumentException if the purpose exceeds 300 characters
+         */
+        public IssueTokenRequestBuilder purpose(String purpose) {
+            if (purpose != null && purpose.length() > 300) {
+                throw new IllegalArgumentException(
+                    "purpose must be at most 300 characters, got " + purpose.length());
+            }
+            if (purpose == null) {
+                body.remove("purpose");
+            } else {
+                body.put("purpose", purpose);
+            }
             return this;
         }
 

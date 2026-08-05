@@ -134,6 +134,30 @@ public Receipt createPayment(...) { ... }
 
 Requests without an agent token get a 401 (matching `@RequireScope`); agent requests whose connection lacks a completed ceremony get a 403 `presence_required`. The raw `Presence` record (`verified`, `method`, `uv`, `verifiedAt`) is also available via `result.presence()` and the `agentadmit.presence` request attribute.
 
+## Declared Purpose
+
+Declared purpose: the user-facing reason recorded on the grant at the consent moment. It is a review-time record only, never an enforcement input — authorization decisions ride scopes, connection status, and consent.
+
+Attach it when issuing a connection token (at most 300 characters):
+
+```java
+Map<String, Object> issued = tokensClient
+    .issueToken("user_8842", List.of("read:orders"))
+    .purpose("Reconcile Q3 invoices")
+    .send();
+```
+
+When set, the SDK includes `purpose` in the token request body; when unset or null it is omitted. A purpose longer than 300 characters throws `IllegalArgumentException` before any request is sent.
+
+The verify result carries it back for display:
+
+```java
+IntrospectionClient.IntrospectionResult result = introspectionClient.verify(token);
+String purpose = result.purpose(); // null when the grant carries no declared purpose
+```
+
+`result.purpose()` is `null` when the grant has no declared purpose or the server predates the feature. Surface it in audit views, admin panels, and connection-review UIs — do not branch authorization on it.
+
 ## Rate Limiting
 
 The AgentAdmit introspection endpoint enforces rate limits. The Java SDK handles HTTP 429 responses **automatically** with exponential backoff and jitter  --  no changes needed in your filter or aspect code.
