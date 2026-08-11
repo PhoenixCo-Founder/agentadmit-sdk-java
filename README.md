@@ -158,6 +158,33 @@ String purpose = result.purpose(); // null when the grant carries no declared pu
 
 `result.purpose()` is `null` when the grant has no declared purpose or the server predates the feature. Surface it in audit views, admin panels, and connection-review UIs — do not branch authorization on it.
 
+## User-Declared Intent
+
+User-declared intent: the user's own words, typed at the consent moment. Where `purpose` is the app's words for why the connection exists, `user_intent` is what the user themselves said they wanted. It is a review-time record only, never an enforcement input — authorization decisions ride scopes, connection status, and consent.
+
+Attach it when issuing a connection token (at most 300 characters):
+
+```java
+Map<String, Object> issued = tokensClient
+    .issueToken("user_8842", List.of("read:orders"))
+    .purpose("Reconcile Q3 invoices")
+    .userIntent("Match my September invoices against the bank statement")
+    .send();
+```
+
+When set, the SDK includes `user_intent` in the token request body; when unset or null it is omitted. An intent longer than 300 characters throws `IllegalArgumentException` before any request is sent.
+
+It flows identically to purpose — recorded on the grant, carried on verify, stamped onto audit rows and ledger events. When the hosted presence ceremony runs, the user-declared intent is included in the verifiable-consent-evidence commitment.
+
+The verify result carries it back for display:
+
+```java
+IntrospectionClient.IntrospectionResult result = introspectionClient.verify(token);
+String userIntent = result.userIntent(); // null when the grant carries no user-declared intent
+```
+
+`result.userIntent()` is `null` when the grant has no user-declared intent or the server predates the feature. Surface it in audit views, admin panels, and connection-review UIs — do not branch authorization on it.
+
 ## Rate Limiting
 
 The AgentAdmit introspection endpoint enforces rate limits. The Java SDK handles HTTP 429 responses **automatically** with exponential backoff and jitter  --  no changes needed in your filter or aspect code.

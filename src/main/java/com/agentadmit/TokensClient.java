@@ -201,6 +201,33 @@ public class TokensClient {
         }
 
         /**
+         * Set the user-declared intent: the user's own words, typed at the
+         * consent moment (distinct from {@link #purpose(String)}, which is
+         * the app's words). It is a review-time record only, never an
+         * enforcement input — authorization decisions ride scopes,
+         * connection status, and consent.
+         *
+         * <p>When non-null it is included as {@code user_intent} in the
+         * request body; when null it is omitted.
+         *
+         * @param userIntent the user-declared intent (at most 300 characters), or null to omit
+         * @return this builder
+         * @throws IllegalArgumentException if the intent exceeds 300 characters
+         */
+        public IssueTokenRequestBuilder userIntent(String userIntent) {
+            if (userIntent != null && userIntent.length() > 300) {
+                throw new IllegalArgumentException(
+                    "userIntent must be at most 300 characters, got " + userIntent.length());
+            }
+            if (userIntent == null) {
+                body.remove("user_intent");
+            } else {
+                body.put("user_intent", userIntent);
+            }
+            return this;
+        }
+
+        /**
          * Set an explicit connection duration in seconds (60–31536000).
          *
          * @param seconds the duration
