@@ -161,6 +161,12 @@ public class IntrospectionClient {
                 // tolerance convention for metadata, not the identity-field
                 // strictness: absent or malformed reads as null.
                 String purpose = data.get("purpose") instanceof String ps ? ps : null;
+                // User-declared intent: the user's own words, typed at the
+                // consent moment (distinct from purpose, the app's words).
+                // Review-time record only, never an enforcement input — same
+                // metadata tolerance as purpose: absent or malformed reads
+                // as null, never a rejection.
+                String userIntent = data.get("user_intent") instanceof String uis ? uis : null;
                 long exp = data.get("exp") instanceof Number n ? n.longValue() : 0L;
 
                 if (userId == null) {
@@ -188,7 +194,7 @@ public class IntrospectionClient {
                 // isPresenceVerified() then reports false (fail closed).
                 Presence presence = Presence.fromVerifyData(data.get("presence"));
 
-                return new IntrospectionResult(userId, connectionId, scopes, agentLabel, sub, role, appId, jti, exp, consent, presence, purpose);
+                return new IntrospectionResult(userId, connectionId, scopes, agentLabel, sub, role, appId, jti, exp, consent, presence, purpose, userIntent);
             } catch (AgentAdmitException e) {
                 throw e;
             } catch (Exception e) {
@@ -325,6 +331,11 @@ public class IntrospectionClient {
      *                     grant at the consent moment (null if absent). Review-time
      *                     record only, never an enforcement input; authorization
      *                     decisions ride scopes, connection status, and consent.
+     * @param userIntent   user-declared intent: the user's own words, typed at the
+     *                     consent moment (null if absent; distinct from purpose,
+     *                     the app's words). Review-time record only, never an
+     *                     enforcement input; authorization decisions ride scopes,
+     *                     connection status, and consent.
      */
     public record IntrospectionResult(
         String userId,
@@ -338,7 +349,8 @@ public class IntrospectionClient {
         long exp,
         Map<String, Object> consent,
         Presence presence,
-        String purpose
+        String purpose,
+        String userIntent
     ) {
         /**
          * Check whether a specific scope was granted.

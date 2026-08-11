@@ -151,7 +151,7 @@ class ConsentTest {
     private static IntrospectionClient.IntrospectionResult resultWithConsent(Map<String, Object> consent) {
         return new IntrospectionClient.IntrospectionResult(
             "u1", "conn1", List.of("read:orders"), "Bot",
-            null, null, null, null, 0L, consent, null, null);
+            null, null, null, null, 0L, consent, null, null, null);
     }
 
     @Test
