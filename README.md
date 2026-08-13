@@ -185,6 +185,23 @@ String userIntent = result.userIntent(); // null when the grant carries no user-
 
 `result.userIntent()` is `null` when the grant has no user-declared intent or the server predates the feature. Surface it in audit views, admin panels, and connection-review UIs — do not branch authorization on it.
 
+## App-Attested Presence
+
+If your app gates token minting behind its own embedded passkey/WebAuthn ceremony, AgentAdmit never witnesses that ceremony (it is origin-bound), so by default the hosted service reports `presence.verified: false` for those connections. Attest the ceremony fact at issuance to close that gap — AFTER verifying and consuming your own fresh, purpose-bound attestation:
+
+```java
+import java.time.Instant;
+
+Map<String, Object> issued = tokensClient
+    .issueToken("user_42", List.of("read:orders"))
+    .presence(AppAttestedPresence.of("my_webauthn", attestation.createdAt()))
+    .send();
+```
+
+The SDK sends it as `presence: {verified: true, uv: true, method, verified_at}` — `verified`/`uv` are literal true by construction and cannot represent anything else. The hosted service validates freshness (10-minute window, 60 s future clock-skew slack) and stores the method provenance-marked `app:<method>` so app-attested facts stay distinct from ceremonies AgentAdmit witnessed itself. Introspection, the grant-event ledger, and the evidence API then carry `presence.verified: true` for the connection.
+
+Honesty ceiling: this is your app's attestation, recorded and provenance-marked. It is not witnessed by AgentAdmit and not independently verifiable. Only attest a ceremony that verified the user with UV (biometric or PIN user verification); a ceremony without UV carries no presence fact, so do not set one. An out-of-contract method (`^[a-z0-9_]+$`, 1-60) or a missing timestamp throws `IllegalArgumentException` at construction, before any request; `verified_at` serializes RFC 3339 with an explicit offset (the hosted contract).
+
 ## Rate Limiting
 
 The AgentAdmit introspection endpoint enforces rate limits. The Java SDK handles HTTP 429 responses **automatically** with exponential backoff and jitter  --  no changes needed in your filter or aspect code.
