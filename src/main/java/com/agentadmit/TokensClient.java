@@ -228,6 +228,31 @@ public class TokensClient {
         }
 
         /**
+         * Attest your app's own presence ceremony for this mint. Set it
+         * AFTER verifying and consuming a fresh, purpose-bound
+         * WebAuthn/passkey attestation. The fact is forwarded as
+         * {@code presence: {verified: true, uv: true, method, verified_at}}
+         * and stored provenance-marked {@code app:<method>} — recorded, but
+         * not witnessed by AgentAdmit and not independently verifiable.
+         *
+         * <p>When non-null it is included as {@code presence} in the request
+         * body; when null it is omitted (omitting the field is the only way
+         * to say "no ceremony"). The hosted service enforces freshness
+         * (10-minute window, 60 s future clock-skew slack).
+         *
+         * @param presence the app-attested ceremony fact, or null to omit
+         * @return this builder
+         */
+        public IssueTokenRequestBuilder presence(AppAttestedPresence presence) {
+            if (presence == null) {
+                body.remove("presence");
+            } else {
+                body.put("presence", presence.toWire());
+            }
+            return this;
+        }
+
+        /**
          * Set an explicit connection duration in seconds (60–31536000).
          *
          * @param seconds the duration
