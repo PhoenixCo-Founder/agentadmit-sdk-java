@@ -2,11 +2,13 @@ package com.agentadmit;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.EnableAspectJAutoProxy;
+import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping;
 
 /**
  * Spring Boot auto-configuration for AgentAdmit SDK.
@@ -40,19 +42,42 @@ public class AgentAdmitAutoConfiguration {
     }
 
     /**
+     * Register the default {@link RequiredScopeResolver} if not already
+     * present: a {@link HandlerMappingScopeResolver} that reads
+     * {@link RequireScope} / {@link RequireScopeIfAgent} off the Spring MVC
+     * handler method mapped to the request, so the filter can declare
+     * {@code scope_used} on the verify call. In a context without a
+     * {@link RequestMappingHandlerMapping} the resolver resolves {@code null}
+     * for every request and the field is simply omitted.
+     *
+     * @param handlerMappings lazily provides the MVC handler mapping when the
+     *                        context has one
+     * @return the required-scope resolver bean
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public RequiredScopeResolver agentAdmitRequiredScopeResolver(
+            ObjectProvider<RequestMappingHandlerMapping> handlerMappings) {
+        return new HandlerMappingScopeResolver(handlerMappings::getIfAvailable);
+    }
+
+    /**
      * Register {@link AgentAdmitFilter} as a bean if not already present.
      * Logs a confirmation that scope enforcement is active.
      *
      * @param config              AgentAdmit configuration
      * @param introspectionClient the introspection client
+     * @param requiredScopeResolver resolver used to declare {@code scope_used}
+     *                              audit telemetry on verify calls
      * @return the filter bean
      */
     @Bean
     @ConditionalOnMissingBean
     public AgentAdmitFilter agentAdmitFilter(AgentAdmitConfig config,
-                                              IntrospectionClient introspectionClient) {
+                                              IntrospectionClient introspectionClient,
+                                              RequiredScopeResolver requiredScopeResolver) {
         logger.info("AgentAdmit scope enforcement is active (filter + aspect registered).");
-        return new AgentAdmitFilter(config, introspectionClient);
+        return new AgentAdmitFilter(config, introspectionClient, requiredScopeResolver);
     }
 
     /**

@@ -170,7 +170,20 @@ public class CallerConsentFilter implements Filter {
 
             IntrospectionClient.IntrospectionResult result;
             try {
-                result = introspectionClient.verify(token);
+                // Per-call audit telemetry: declare the request path (query
+                // string stripped) and method. scope_used is deliberately NOT
+                // declared here: this filter evaluates consent BEFORE scope
+                // (Patent FIG. 3 stage order), so the scope check stays local
+                // and a consent-denied caller never learns scope state.
+                result = introspectionClient.verify(token, VerifyTelemetry.forRequest(httpReq, null));
+            } catch (AgentAdmitException.ActiveErrorDenial e) {
+                // Hosted refusal of this call on an active token (e.g.
+                // bound_exceeded): always a 403 denial with the canonical
+                // body for the code — never a pass-through.
+                httpResp.setStatus(e.getStatusCode());
+                httpResp.setContentType("application/json");
+                httpResp.getWriter().write(e.getResponseBody());
+                return;
             } catch (AgentAdmitException e) {
                 writeError(httpResp, e.getStatusCode(),
                     e.getStatusCode() == 401 ? "invalid_token" : "introspection_failed",

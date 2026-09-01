@@ -372,7 +372,7 @@ class PresenceTest {
         Presence presence = new Presence(Boolean.TRUE, "webauthn", Boolean.TRUE, "2026-07-05T00:00:00Z");
         IntrospectionClient client = new IntrospectionClient(config) {
             @Override
-            public IntrospectionResult verify(String token) {
+            public IntrospectionResult verify(String token, VerifyTelemetry telemetry) {
                 return new IntrospectionResult("user_1", "conn_1", List.of("read:orders"),
                     "TestAgent", null, null, null, null, 0L, null, presence, null, null);
             }

@@ -59,6 +59,28 @@ public class IntrospectionClient {
      * @throws AgentAdmitException.RateLimitError if rate-limited and retries exhausted
      */
     public IntrospectionResult verify(String token) throws AgentAdmitException {
+        return verify(token, null);
+    }
+
+    /**
+     * Validate an ag_at_ token via introspection, declaring per-call audit
+     * telemetry ({@code scope_used}, {@code endpoint}, {@code method}) on the
+     * verify request body. Fields the caller does not know are omitted from
+     * the body — never sent as null or empty strings. The hosted service
+     * stamps the declared values onto the app's tamper-evident audit log.
+     *
+     * <p>Behaves exactly like {@link #verify(String)} otherwise, including
+     * 429 retry handling.
+     *
+     * @param token     The full token including ag_at_ prefix
+     * @param telemetry per-call audit telemetry, or {@code null} to send none
+     * @return IntrospectionResult with scopes, user_id, connection_id
+     * @throws AgentAdmitException if validation fails
+     * @throws AgentAdmitException.ActiveErrorDenial if the hosted service refuses the
+     *         call on an active token ({@code active: true} plus an {@code error} code)
+     * @throws AgentAdmitException.RateLimitError if rate-limited and retries exhausted
+     */
+    public IntrospectionResult verify(String token, VerifyTelemetry telemetry) throws AgentAdmitException {
         if (!token.startsWith(config.getTokenPrefixAccess())) {
             throw new AgentAdmitException("Not an AgentAdmit access token", 401);
         }
@@ -68,7 +90,12 @@ public class IntrospectionClient {
         long waitedMs = 0L;     // cumulative wait across retries
 
         for (int attempt = 0; attempt <= maxRetries; attempt++) {
-            HttpResponse<String> response = sendIntrospectionRequest(token);
+            // Route through the 1-arg overload when there is no telemetry so
+            // subclasses that override sendIntrospectionRequest(String) keep
+            // intercepting the plain path.
+            HttpResponse<String> response = telemetry == null
+                ? sendIntrospectionRequest(token)
+                : sendIntrospectionRequest(token, telemetry);
 
             int status = response.statusCode();
 
@@ -134,11 +161,15 @@ public class IntrospectionClient {
                     throw new AgentAdmitException("Token is not active: " + reason, 401);
                 }
 
-                // insufficient_scope arrives with active: true (token valid,
-                // requested scope not granted) — treat it as a 403.
-                if ("insufficient_scope".equals(data.get("error"))) {
-                    String desc = (String) data.getOrDefault("error_description", "Scope not granted");
-                    throw new AgentAdmitException(desc, 403);
+                // Active-error fail-closed: an active response that carries a
+                // string error field is a REFUSAL of this call, never a
+                // pass-through. insufficient_scope arrives with active: true
+                // (token valid, requested scope not granted); bound_exceeded
+                // means a bounded capability refused the call; any other or
+                // unknown code is refused the same way, forward-compatible
+                // fail-closed. All are 403 with a canonical denial body.
+                if (data.get("error") instanceof String errorCode) {
+                    throw buildActiveErrorDenial(errorCode, data, telemetry);
                 }
 
                 // Validate that string fields are actually strings when present
@@ -221,12 +252,100 @@ public class IntrospectionClient {
         }
     }
 
+    /**
+     * Build the canonical 403 denial for an {@code active: true} response that
+     * carries a string {@code error} field (a hosted refusal of this call).
+     *
+     * <ul>
+     *   <li>{@code insufficient_scope} — spec §6.4 step-up shape
+     *       {@code {error, required_scope, granted_scopes}};
+     *       {@code granted_scopes} comes from the hosted response when
+     *       present, the response's own {@code scopes} list otherwise;
+     *       {@code required_scope} from the hosted response when present,
+     *       the declared {@code scope_used} telemetry otherwise.</li>
+     *   <li>{@code bound_exceeded} — hosted {@code error_description},
+     *       {@code bound}, and {@code renewal} passed through verbatim.</li>
+     *   <li>any other code — generic fail-closed refusal.</li>
+     * </ul>
+     */
+    private AgentAdmitException.ActiveErrorDenial buildActiveErrorDenial(
+            String errorCode, Map<String, Object> data, VerifyTelemetry telemetry) {
+        Map<String, Object> body = new java.util.LinkedHashMap<>();
+        String message;
+        switch (errorCode) {
+            case "insufficient_scope" -> {
+                body.put("error", "insufficient_scope");
+                String requiredScope = data.get("required_scope") instanceof String rs
+                    ? rs
+                    : (telemetry != null ? telemetry.scopeUsed() : null);
+                if (requiredScope != null) {
+                    body.put("required_scope", requiredScope);
+                }
+                Object grantedScopes = data.get("granted_scopes") instanceof List<?> hosted
+                    ? hosted
+                    : (data.get("scopes") instanceof List<?> local ? local : List.of());
+                body.put("granted_scopes", grantedScopes);
+                message = data.getOrDefault("error_description", "Scope not granted") instanceof String d
+                    ? d : "Scope not granted";
+            }
+            case "bound_exceeded" -> {
+                body.put("error", "bound_exceeded");
+                message = data.get("error_description") instanceof String d
+                    ? d : "A bounded capability on this connection refused the call.";
+                body.put("error_description", message);
+                if (data.containsKey("bound")) body.put("bound", data.get("bound"));
+                if (data.containsKey("renewal")) body.put("renewal", data.get("renewal"));
+            }
+            default -> {
+                body.put("error", errorCode);
+                message = "Call refused by the authorization service.";
+                body.put("error_description", message);
+            }
+        }
+        String json;
+        try {
+            json = objectMapper.writeValueAsString(body);
+        } catch (Exception e) {
+            // Never let serialization turn a refusal into an allow; fall back
+            // to a minimal well-formed denial body.
+            json = "{\"error\":\"introspection_denied\"}";
+        }
+        return new AgentAdmitException.ActiveErrorDenial(message, errorCode, json);
+    }
+
+    /**
+     * Serialize the verify request body: {@code token} plus any known
+     * per-call audit telemetry. Telemetry fields that are unknown
+     * ({@code null} after normalization) are omitted entirely — never sent as
+     * null or empty strings. Package-visible so tests can assert on the exact
+     * body the production path sends.
+     */
+    String buildVerifyBody(String token, VerifyTelemetry telemetry) throws Exception {
+        // Serialize via Jackson — string concatenation would allow JSON
+        // injection through a hostile token value.
+        Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("token", token);
+        if (telemetry != null) {
+            if (telemetry.scopeUsed() != null) body.put("scope_used", telemetry.scopeUsed());
+            if (telemetry.endpoint() != null) body.put("endpoint", telemetry.endpoint());
+            if (telemetry.method() != null) body.put("method", telemetry.method());
+        }
+        return objectMapper.writeValueAsString(body);
+    }
+
     /** Package-visible so tests can stub the hosted-service response. */
     HttpResponse<String> sendIntrospectionRequest(String token) throws AgentAdmitException {
+        return sendIntrospectionRequest(token, null);
+    }
+
+    /**
+     * Send the introspection request carrying per-call audit telemetry.
+     * Package-visible so tests can stub the hosted-service response.
+     */
+    HttpResponse<String> sendIntrospectionRequest(String token, VerifyTelemetry telemetry)
+            throws AgentAdmitException {
         try {
-            // Serialize via Jackson — string concatenation would allow JSON
-            // injection through a hostile token value.
-            String body = objectMapper.writeValueAsString(Map.of("token", token));
+            String body = buildVerifyBody(token, telemetry);
             HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(config.getVerifyUrl()))
                 .header("Authorization", "Bearer " + config.getApiKey())

@@ -47,16 +47,40 @@ public class AgentAdmitFilter implements Filter {
     private static final Logger logger = LoggerFactory.getLogger(AgentAdmitFilter.class);
     private final AgentAdmitConfig config;
     private final IntrospectionClient introspectionClient;
+    private final RequiredScopeResolver scopeResolver;
 
     /**
-     * Construct the filter with required dependencies.
+     * Construct the filter with required dependencies. The verify call
+     * declares {@code endpoint} and {@code method} audit telemetry from the
+     * request; {@code scope_used} is omitted because no scope resolver is
+     * configured (see {@link #AgentAdmitFilter(AgentAdmitConfig,
+     * IntrospectionClient, RequiredScopeResolver)}).
      *
      * @param config               AgentAdmit configuration
      * @param introspectionClient  client used to verify tokens via hosted introspection
      */
     public AgentAdmitFilter(AgentAdmitConfig config, IntrospectionClient introspectionClient) {
+        this(config, introspectionClient, null);
+    }
+
+    /**
+     * Construct the filter with a scope resolver so the verify call can also
+     * declare {@code scope_used} — the single scope the route enforces —
+     * resolved BEFORE introspection runs. Spring Boot auto-configuration
+     * wires a {@link HandlerMappingScopeResolver} that reads
+     * {@link RequireScope} / {@link RequireScopeIfAgent} off the mapped
+     * handler method.
+     *
+     * @param config               AgentAdmit configuration
+     * @param introspectionClient  client used to verify tokens via hosted introspection
+     * @param scopeResolver        resolves the enforced scope for a request, or
+     *                             {@code null} to omit {@code scope_used}
+     */
+    public AgentAdmitFilter(AgentAdmitConfig config, IntrospectionClient introspectionClient,
+                            RequiredScopeResolver scopeResolver) {
         this.config = config;
         this.introspectionClient = introspectionClient;
+        this.scopeResolver = scopeResolver;
     }
 
     /**
@@ -83,7 +107,11 @@ public class AgentAdmitFilter implements Filter {
             String token = auth.substring(7); // Remove "Bearer " (any casing)
 
             try {
-                IntrospectionClient.IntrospectionResult result = introspectionClient.verify(token);
+                // Per-call audit telemetry: declare the enforced scope (when a
+                // resolver can determine it before dispatch), the request path
+                // (query string stripped), and the method on the verify call.
+                IntrospectionClient.IntrospectionResult result =
+                    introspectionClient.verify(token, VerifyTelemetry.forRequest(httpReq, resolveScopeUsed(httpReq)));
 
                 httpReq.setAttribute("agentadmit.authType", "agent");
                 httpReq.setAttribute("agentadmit.userId", result.userId());
@@ -95,12 +123,23 @@ public class AgentAdmitFilter implements Filter {
                 logger.debug("AgentAdmit: validated agent token for user={} scopes={}", 
                     result.userId(), result.scopes());
 
+            } catch (AgentAdmitException.ActiveErrorDenial e) {
+                // The hosted service refused this call on an active token
+                // (e.g. insufficient_scope, bound_exceeded, or an unknown
+                // refusal code). Always a 403 denial with the canonical body
+                // for the code — never a pass-through, and the chain is NOT
+                // continued.
+                HttpServletResponse httpResp = (HttpServletResponse) response;
+                httpResp.setStatus(e.getStatusCode());
+                httpResp.setContentType("application/json");
+                httpResp.getWriter().write(e.getResponseBody());
+                return;
             } catch (AgentAdmitException e) {
                 HttpServletResponse httpResp = (HttpServletResponse) response;
                 httpResp.setStatus(e.getStatusCode());
                 httpResp.setContentType("application/json");
                 httpResp.getWriter().write(
-                    "{\"error\":\"" + (e.getStatusCode() == 401 ? "invalid_token" : "introspection_failed") + 
+                    "{\"error\":\"" + (e.getStatusCode() == 401 ? "invalid_token" : "introspection_failed") +
                     "\",\"error_description\":\"" + e.getMessage().replace("\"", "\\\"") + "\"}"
                 );
                 return;
@@ -108,5 +147,20 @@ public class AgentAdmitFilter implements Filter {
         }
 
         chain.doFilter(request, response);
+    }
+
+    /**
+     * Resolve the scope this request's route enforces, for {@code scope_used}
+     * telemetry. Returns {@code null} (field omitted) when no resolver is
+     * configured or resolution fails — telemetry never blocks verification.
+     */
+    private String resolveScopeUsed(HttpServletRequest request) {
+        if (scopeResolver == null) return null;
+        try {
+            return scopeResolver.resolveRequiredScope(request);
+        } catch (RuntimeException e) {
+            logger.debug("AgentAdmit: scope_used resolution failed; omitting from telemetry", e);
+            return null;
+        }
     }
 }

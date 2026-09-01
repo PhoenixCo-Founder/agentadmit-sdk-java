@@ -22,6 +22,7 @@ class AgentAdmitAutoConfigurationTest {
             assertThat(ctx).hasSingleBean(AgentAdmitConfig.class);
             assertThat(ctx).hasSingleBean(IntrospectionClient.class);
             assertThat(ctx).hasSingleBean(AgentAdmitFilter.class);
+            assertThat(ctx).hasSingleBean(RequiredScopeResolver.class);
             assertThat(ctx).hasSingleBean(ScopeEnforcementAspect.class);
             assertThat(ctx).hasSingleBean(AlertsClient.class);
             assertThat(ctx).hasSingleBean(TokensClient.class);

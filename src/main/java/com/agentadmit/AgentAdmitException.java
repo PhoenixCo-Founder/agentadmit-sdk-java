@@ -27,6 +27,64 @@ public class AgentAdmitException extends RuntimeException {
     public int getStatusCode() { return statusCode; }
 
     // -------------------------------------------------------------------------
+    // ActiveErrorDenial — nested static class
+    // -------------------------------------------------------------------------
+
+    /**
+     * Thrown when the hosted introspection response reports {@code active: true}
+     * together with a string {@code error} field. Such a response is a REFUSAL
+     * of this specific call (the token itself stays valid), never a
+     * pass-through — for example {@code insufficient_scope} (the requested
+     * scope is not granted) or {@code bound_exceeded} (a bounded capability is
+     * exhausted). Unknown error codes are refused the same way, fail closed.
+     *
+     * <p>Always carries HTTP status 403 and a ready-to-write JSON response
+     * body in the canonical denial shape for the error code, so filters and
+     * handlers can relay the refusal without rebuilding it:
+     * <ul>
+     *   <li>{@code insufficient_scope} — {@code {error, required_scope,
+     *       granted_scopes}} (the step-up shape, matching the local scope
+     *       check in {@link ScopeEnforcementAspect}).</li>
+     *   <li>{@code bound_exceeded} — {@code {error, error_description,
+     *       bound?, renewal?}} with the hosted fields passed through
+     *       verbatim.</li>
+     *   <li>any other code — {@code {error, error_description}} with a
+     *       generic refusal description.</li>
+     * </ul>
+     */
+    public static class ActiveErrorDenial extends AgentAdmitException {
+        /** The error code reported by the hosted service (e.g. {@code bound_exceeded}). */
+        private final String errorCode;
+        /** Canonical JSON denial body for this error code, ready to write. */
+        private final String responseBody;
+
+        /**
+         * Create a new ActiveErrorDenial. Status is always 403.
+         *
+         * @param message      human-readable refusal description
+         * @param errorCode    the error code reported by the hosted service
+         * @param responseBody canonical JSON denial body for this error code
+         */
+        public ActiveErrorDenial(String message, String errorCode, String responseBody) {
+            super(message, 403);
+            this.errorCode = errorCode;
+            this.responseBody = responseBody;
+        }
+
+        /**
+         * Get the error code reported by the hosted service.
+         * @return the error code (e.g. {@code insufficient_scope}, {@code bound_exceeded})
+         */
+        public String getErrorCode() { return errorCode; }
+
+        /**
+         * Get the canonical JSON denial body for this refusal.
+         * @return a ready-to-write JSON response body
+         */
+        public String getResponseBody() { return responseBody; }
+    }
+
+    // -------------------------------------------------------------------------
     // RateLimitError — nested static class
     // -------------------------------------------------------------------------
 
