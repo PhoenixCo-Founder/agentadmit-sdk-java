@@ -170,12 +170,13 @@ public class CallerConsentFilter implements Filter {
 
             IntrospectionClient.IntrospectionResult result;
             try {
-                // Per-call audit telemetry: declare the request path (query
-                // string stripped) and method. scope_used is deliberately NOT
-                // declared here: this filter evaluates consent BEFORE scope
-                // (Patent FIG. 3 stage order), so the scope check stays local
-                // and a consent-denied caller never learns scope state.
-                result = introspectionClient.verify(token, VerifyTelemetry.forRequest(httpReq, null));
+                // Declare the exact exercised scope in the same hosted round
+                // trip. consent_first guarantees a denied caller class cannot
+                // learn scope state before this filter returns its consent 403.
+                result = introspectionClient.verify(
+                    token,
+                    VerifyTelemetry.forConsentFirstRequest(httpReq, options.requiredScope())
+                );
             } catch (AgentAdmitException.ActiveErrorDenial e) {
                 // Hosted refusal of this call on an active token (e.g.
                 // bound_exceeded): always a 403 denial with the canonical

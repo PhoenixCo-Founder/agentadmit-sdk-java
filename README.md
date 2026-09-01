@@ -222,6 +222,10 @@ IntrospectionClient.IntrospectionResult result = introspectionClient.verify(
 
 `verify(token)` without telemetry keeps sending exactly `{token}`, unchanged.
 
+`CallerConsentFilter` reports its configured scope too. It uses the hosted
+consent-first guard, which resolves consent before scope so denied caller
+classes receive no scope-state disclosure.
+
 The hosted service also refuses calls it cannot honor even when the token itself is valid — for example when a required scope is not granted (`insufficient_scope`) or a bounded capability is exhausted (`bound_exceeded`). The SDK treats any `active: true` response that carries an `error` code as a denial: the filter writes a 403 with the canonical body for that code and the request never reaches your handler. Unknown refusal codes fail closed the same way, so new hosted enforcement features deny by default instead of passing through.
 
 ## Rate Limiting

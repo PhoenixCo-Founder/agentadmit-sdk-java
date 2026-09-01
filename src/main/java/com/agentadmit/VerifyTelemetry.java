@@ -29,7 +29,7 @@ import jakarta.servlet.http.HttpServletRequest;
  * @param endpoint  the inbound request path (query string stripped), or {@code null} when unknown
  * @param method    the uppercase HTTP method, or {@code null} when unknown
  */
-public record VerifyTelemetry(String scopeUsed, String endpoint, String method) {
+public record VerifyTelemetry(String scopeUsed, String endpoint, String method, boolean consentFirst) {
 
     /** Hosted cap on {@code scope_used} length. */
     public static final int MAX_SCOPE_USED_LENGTH = 120;
@@ -51,6 +51,11 @@ public record VerifyTelemetry(String scopeUsed, String endpoint, String method) 
         scopeUsed = truncate(blankToNull(scopeUsed), MAX_SCOPE_USED_LENGTH);
         endpoint = truncate(stripQuery(blankToNull(endpoint)), MAX_ENDPOINT_LENGTH);
         method = truncate(upper(blankToNull(method)), MAX_METHOD_LENGTH);
+    }
+
+    /** Backward-compatible constructor for ordinary (non-consent-gated) verification. */
+    public VerifyTelemetry(String scopeUsed, String endpoint, String method) {
+        this(scopeUsed, endpoint, method, false);
     }
 
     /**
@@ -80,6 +85,14 @@ public record VerifyTelemetry(String scopeUsed, String endpoint, String method) 
             return new VerifyTelemetry(scopeUsed, null, null);
         }
         return new VerifyTelemetry(scopeUsed, request.getRequestURI(), request.getMethod());
+    }
+
+    /** Request telemetry for a caller-identity gate that must resolve consent before scope. */
+    public static VerifyTelemetry forConsentFirstRequest(HttpServletRequest request, String scopeUsed) {
+        if (request == null) {
+            return new VerifyTelemetry(scopeUsed, null, null, true);
+        }
+        return new VerifyTelemetry(scopeUsed, request.getRequestURI(), request.getMethod(), true);
     }
 
     private static String blankToNull(String value) {
