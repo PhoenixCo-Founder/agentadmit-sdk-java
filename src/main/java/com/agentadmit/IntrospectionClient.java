@@ -329,6 +329,7 @@ public class IntrospectionClient {
             if (telemetry.scopeUsed() != null) body.put("scope_used", telemetry.scopeUsed());
             if (telemetry.endpoint() != null) body.put("endpoint", telemetry.endpoint());
             if (telemetry.method() != null) body.put("method", telemetry.method());
+            if (telemetry.consentFirst()) body.put("consent_first", true);
         }
         return objectMapper.writeValueAsString(body);
     }

@@ -113,6 +113,23 @@ class VerifyTelemetryTest {
     }
 
     @Test
+    void consentFirstTelemetryCarriesScopeWithoutChangingOrdinaryRequests() throws Exception {
+        CapturingClient client = new CapturingClient(stubResponse(200, ACTIVE_BODY));
+        MockHttpServletRequest req = agentRequest("GET", "/api/records");
+
+        client.verify("ag_at_dummy_token",
+            VerifyTelemetry.forConsentFirstRequest(req, "read:records"));
+
+        assertEquals("read:records", client.lastBody.get("scope_used"));
+        assertEquals("/api/records", client.lastBody.get("endpoint"));
+        assertEquals("GET", client.lastBody.get("method"));
+        assertEquals(true, client.lastBody.get("consent_first"));
+
+        client.verify("ag_at_dummy_token", VerifyTelemetry.forRequest(req, "read:records"));
+        assertFalse(client.lastBody.containsKey("consent_first"));
+    }
+
+    @Test
     void handlerMappingResolverReadsRequireScopeOffTheMappedHandler() throws Exception {
         // The full §2 restructure: the filter learns the scope the route
         // enforces (the @RequireScope the aspect will enforce later) BEFORE
