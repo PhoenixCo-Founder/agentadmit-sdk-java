@@ -5,6 +5,8 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -76,8 +78,9 @@ public class AgentAdmitFilter implements Filter {
      * @param scopeResolver        resolves the enforced scope for a request, or
      *                             {@code null} to omit {@code scope_used}
      */
+    @Autowired
     public AgentAdmitFilter(AgentAdmitConfig config, IntrospectionClient introspectionClient,
-                            RequiredScopeResolver scopeResolver) {
+                            @Nullable RequiredScopeResolver scopeResolver) {
         this.config = config;
         this.introspectionClient = introspectionClient;
         this.scopeResolver = scopeResolver;

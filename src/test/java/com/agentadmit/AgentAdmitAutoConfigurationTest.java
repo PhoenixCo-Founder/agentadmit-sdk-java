@@ -44,4 +44,24 @@ class AgentAdmitAutoConfigurationTest {
                     assertThat(ctx.getBean(AgentAdmitFilter.class)).isSameAs(userFilter);
                 });
     }
+
+    /**
+     * Regression (1.10.0 pre-publish review): the filter gained a second
+     * constructor; without @Autowired on the telemetry constructor, a
+     * component-scanning consumer (no auto-configuration) crashes at
+     * context refresh with BeanInstantiationException. @Nullable lets the
+     * scope resolver be absent (scope_used omitted).
+     */
+    @Test
+    void componentScannedFilterInstantiatesWithoutScopeResolverBean() {
+        org.springframework.context.annotation.AnnotationConfigApplicationContext ctx =
+                new org.springframework.context.annotation.AnnotationConfigApplicationContext();
+        ctx.registerBean(AgentAdmitConfig.class, AgentAdmitConfig::new);
+        ctx.registerBean(IntrospectionClient.class,
+                () -> new IntrospectionClient(new AgentAdmitConfig()));
+        ctx.register(AgentAdmitFilter.class);
+        ctx.refresh();
+        assertThat(ctx.getBean(AgentAdmitFilter.class)).isNotNull();
+        ctx.close();
+    }
 }
