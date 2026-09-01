@@ -38,7 +38,7 @@ class BearerCaseInsensitiveTest {
         }
 
         @Override
-        public IntrospectionResult verify(String token) {
+        public IntrospectionResult verify(String token, VerifyTelemetry telemetry) {
             return new IntrospectionResult("user_1", "conn_1", List.of("read:orders"),
                 "TestAgent", null, null, null, null, 0L, null, null, null, null);
         }

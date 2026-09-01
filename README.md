@@ -202,6 +202,28 @@ The SDK sends it as `presence: {verified: true, uv: true, method, verified_at}` 
 
 Honesty ceiling: this is your app's attestation, recorded and provenance-marked. It is not witnessed by AgentAdmit and not independently verifiable. Only attest a ceremony that verified the user with UV (biometric or PIN user verification); a ceremony without UV carries no presence fact, so do not set one. An out-of-contract method (`^[a-z0-9_]+$`, 1-60) or a missing timestamp throws `IllegalArgumentException` at construction, before any request; `verified_at` serializes RFC 3339 with an explicit offset (the hosted contract).
 
+## Per-Call Audit Telemetry
+
+Every verified call reports the exercised scope, endpoint, and method to your app's tamper-evident audit log on the hosted service. The SDK declares three optional fields on the introspection request body:
+
+- `scope_used` — the single scope the route enforces for this call. In a Spring MVC app the filter resolves it automatically from the `@RequireScope` / `@RequireScopeIfAgent` annotation on the mapped handler method, before introspection runs.
+- `endpoint` — the request path only. The query string is stripped before anything leaves your app (query strings can carry PII), and the path is truncated to 500 characters.
+- `method` — the HTTP method, uppercased (capped at 20 characters).
+
+Fields are sent whenever known and omitted when not — never null or empty strings. When a field is omitted, the audit row honestly records "not reported".
+
+No code changes are required: Spring Boot auto-configuration wires a `RequiredScopeResolver` into `AgentAdmitFilter` so annotated routes declare their scope automatically. Direct client-library calls can declare telemetry explicitly:
+
+```java
+IntrospectionClient.IntrospectionResult result = introspectionClient.verify(
+    token,
+    VerifyTelemetry.of("read:orders", "/api/orders", "GET"));
+```
+
+`verify(token)` without telemetry keeps sending exactly `{token}`, unchanged.
+
+The hosted service also refuses calls it cannot honor even when the token itself is valid — for example when a required scope is not granted (`insufficient_scope`) or a bounded capability is exhausted (`bound_exceeded`). The SDK treats any `active: true` response that carries an `error` code as a denial: the filter writes a 403 with the canonical body for that code and the request never reaches your handler. Unknown refusal codes fail closed the same way, so new hosted enforcement features deny by default instead of passing through.
+
 ## Rate Limiting
 
 The AgentAdmit introspection endpoint enforces rate limits. The Java SDK handles HTTP 429 responses **automatically** with exponential backoff and jitter  --  no changes needed in your filter or aspect code.

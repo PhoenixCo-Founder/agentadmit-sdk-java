@@ -75,7 +75,7 @@ class CallerConsentFilterTest {
         }
 
         @Override
-        HttpResponse<String> sendIntrospectionRequest(String token) {
+        HttpResponse<String> sendIntrospectionRequest(String token, VerifyTelemetry telemetry) {
             return response;
         }
 
