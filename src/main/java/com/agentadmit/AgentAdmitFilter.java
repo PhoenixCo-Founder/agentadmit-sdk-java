@@ -42,14 +42,82 @@ import java.io.IOException;
  *   agentadmit.connectionId — connection identifier
  *   agentadmit.agentLabel   — agent display name
  *   agentadmit.presence     -- {@link Presence} fact for the connection (null when absent)
+ *   agentadmit.actionConfirmation -- {@link ActionConfirmation.Consumed} when the
+ *       hosted service spent a confirm-each-time confirmation to allow this call
+ *
+ * <p><b>Confirm-each-time (1.11.0).</b> The agent's
+ * {@value VerifyTelemetry#ACTION_ATTESTATION_HEADER} header is forwarded on
+ * every verify call whenever it is present. Configure
+ * {@link Options#actionSummary()} on a route group whose scopes are marked
+ * {@code confirm_each_time} and the filter also digests the raw request body
+ * (still readable by your controller) and sends your plain-language summary,
+ * so the hosted confirmation page can commit to the exact action.
  */
 @Component
 public class AgentAdmitFilter implements Filter {
 
     private static final Logger logger = LoggerFactory.getLogger(AgentAdmitFilter.class);
+
+    /**
+     * Describes THIS action in plain language for the human who has to
+     * confirm it ("Pay Alex $50"), for confirm-each-time routes (1.11.0).
+     *
+     * <p>Receives the inbound request and the RAW request body bytes, already
+     * cached — reading them here does not consume the body your controller
+     * will read. Return {@code null} or a blank string to send no summary;
+     * the value is trimmed and capped at
+     * {@value VerifyTelemetry#MAX_ACTION_SUMMARY_LENGTH} characters.
+     *
+     * <p>The summary is yours: AgentAdmit shows it as the headline of the
+     * confirmation page and commits to the text the human saw. It does not
+     * verify the text against the request.
+     */
+    @FunctionalInterface
+    public interface ActionSummary {
+        /**
+         * Describe the action this request performs.
+         *
+         * @param request the inbound request
+         * @param body    the raw request body bytes (empty for a bodyless request)
+         * @return the description for the human, or {@code null} for none
+         */
+        String describe(HttpServletRequest request, byte[] body);
+    }
+
+    /**
+     * Filter options. All fields are optional; {@link #defaults()} yields the
+     * filter's pre-1.11.0 behavior exactly.
+     *
+     * @param actionSummary describes the action for the human on a
+     *        confirm-each-time route. When set, the filter caches and digests
+     *        the raw request body and sends {@code request_digest} plus
+     *        {@code action_summary} on the verify call. When unset, neither is
+     *        sent — but the agent's attestation header is forwarded either way.
+     */
+    public record Options(ActionSummary actionSummary) {
+        /** Options that change nothing: no body digest, no action summary.
+         *
+         * @return default options
+         */
+        public static Options defaults() {
+            return new Options(null);
+        }
+
+        /**
+         * Options for a confirm-each-time route group.
+         *
+         * @param actionSummary describes the action for the human
+         * @return options carrying the summary supplier
+         */
+        public static Options withActionSummary(ActionSummary actionSummary) {
+            return new Options(actionSummary);
+        }
+    }
+
     private final AgentAdmitConfig config;
     private final IntrospectionClient introspectionClient;
     private final RequiredScopeResolver scopeResolver;
+    private final Options options;
 
     /**
      * Construct the filter with required dependencies. The verify call
@@ -81,9 +149,27 @@ public class AgentAdmitFilter implements Filter {
     @Autowired
     public AgentAdmitFilter(AgentAdmitConfig config, IntrospectionClient introspectionClient,
                             @Nullable RequiredScopeResolver scopeResolver) {
+        this(config, introspectionClient, scopeResolver, null);
+    }
+
+    /**
+     * Construct the filter with confirm-each-time options (1.11.0) in
+     * addition to the scope resolver.
+     *
+     * @param config               AgentAdmit configuration
+     * @param introspectionClient  client used to verify tokens via hosted introspection
+     * @param scopeResolver        resolves the enforced scope for a request, or
+     *                             {@code null} to omit {@code scope_used}
+     * @param options              filter options; {@code null} means
+     *                             {@link Options#defaults()}
+     */
+    public AgentAdmitFilter(AgentAdmitConfig config, IntrospectionClient introspectionClient,
+                            @Nullable RequiredScopeResolver scopeResolver,
+                            @Nullable Options options) {
         this.config = config;
         this.introspectionClient = introspectionClient;
         this.scopeResolver = scopeResolver;
+        this.options = options == null ? Options.defaults() : options;
     }
 
     /**
@@ -109,12 +195,35 @@ public class AgentAdmitFilter implements Filter {
                 && auth.substring(7).startsWith(config.getTokenPrefixAccess())) {
             String token = auth.substring(7); // Remove "Bearer " (any casing)
 
+            // Confirm-each-time (1.11.0): on a route group with an action
+            // summary, cache the body BEFORE reading it so the digest and the
+            // downstream controller both see the same bytes. The wrapper is
+            // what continues down the chain.
+            byte[] body = null;
+            if (options.actionSummary() != null) {
+                try {
+                    CachedBodyHttpServletRequest cached = new CachedBodyHttpServletRequest(httpReq);
+                    httpReq = cached;
+                    request = cached;
+                    body = cached.cachedBody();
+                } catch (IOException e) {
+                    // Telemetry must never break the call: verify without the
+                    // digest and let the body reach the handler untouched.
+                    logger.debug("AgentAdmit: request body unavailable for digest; omitting", e);
+                }
+            }
+
             try {
                 // Per-call audit telemetry: declare the enforced scope (when a
                 // resolver can determine it before dispatch), the request path
                 // (query string stripped), and the method on the verify call.
+                // The agent's attestation header rides along whenever present.
                 IntrospectionClient.IntrospectionResult result =
-                    introspectionClient.verify(token, VerifyTelemetry.forRequest(httpReq, resolveScopeUsed(httpReq)));
+                    introspectionClient.verify(token, VerifyTelemetry.forRequest(
+                        httpReq,
+                        resolveScopeUsed(httpReq),
+                        VerifyTelemetry.requestDigestFor(body),
+                        describeAction(httpReq, body)));
 
                 httpReq.setAttribute("agentadmit.authType", "agent");
                 httpReq.setAttribute("agentadmit.userId", result.userId());
@@ -122,14 +231,19 @@ public class AgentAdmitFilter implements Filter {
                 httpReq.setAttribute("agentadmit.connectionId", result.connectionId());
                 httpReq.setAttribute("agentadmit.agentLabel", result.agentLabel());
                 httpReq.setAttribute("agentadmit.presence", result.presence());
+                if (result.actionConfirmation() != null) {
+                    httpReq.setAttribute("agentadmit.actionConfirmation", result.actionConfirmation());
+                }
 
                 logger.debug("AgentAdmit: validated agent token for user={} scopes={}", 
                     result.userId(), result.scopes());
 
             } catch (AgentAdmitException.ActiveErrorDenial e) {
                 // The hosted service refused this call on an active token
-                // (e.g. insufficient_scope, bound_exceeded, or an unknown
-                // refusal code). Always a 403 denial with the canonical body
+                // (e.g. insufficient_scope, bound_exceeded,
+                // confirmation_required — whose body carries the staged
+                // confirmation link — or an unknown refusal code). Always a
+                // 403 denial with the canonical body
                 // for the code — never a pass-through, and the chain is NOT
                 // continued.
                 HttpServletResponse httpResp = (HttpServletResponse) response;
@@ -150,6 +264,24 @@ public class AgentAdmitFilter implements Filter {
         }
 
         chain.doFilter(request, response);
+    }
+
+    /**
+     * Run the configured {@link ActionSummary} over the request and its cached
+     * body. Returns {@code null} when none is configured or the supplier
+     * throws — a description is telemetry, and telemetry never blocks a call
+     * (the hosted service still refuses a confirm-each-time scope without a
+     * confirmation, so nothing is weakened).
+     */
+    private String describeAction(HttpServletRequest request, byte[] body) {
+        ActionSummary summary = options.actionSummary();
+        if (summary == null) return null;
+        try {
+            return summary.describe(request, body == null ? new byte[0] : body);
+        } catch (RuntimeException e) {
+            logger.debug("AgentAdmit: action summary failed; omitting from telemetry", e);
+            return null;
+        }
     }
 
     /**

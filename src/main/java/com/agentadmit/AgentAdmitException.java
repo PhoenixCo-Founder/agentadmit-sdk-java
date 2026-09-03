@@ -85,6 +85,65 @@ public class AgentAdmitException extends RuntimeException {
     }
 
     // -------------------------------------------------------------------------
+    // ConfirmationRequiredDenial — nested static class
+    // -------------------------------------------------------------------------
+
+    /**
+     * Confirm-each-time (1.11.0): the refusal {@code confirmation_required}.
+     * The token is valid and the scope IS granted, but THIS call needs a fresh
+     * human confirmation before it can run.
+     *
+     * <p>An {@link ActiveErrorDenial}, so every gate that already fails closed
+     * on hosted refusals keeps doing so unchanged (403, canonical body, chain
+     * not continued). The extra typing is for custom gates that want to relay
+     * the ceremony: {@link #getConfirmation()} is the staged
+     * {@link ActionConfirmation} (hand {@code actionSessionUrl} to the human;
+     * the agent retries with {@code actionSessionId} in the
+     * {@value VerifyTelemetry#ACTION_ATTESTATION_HEADER} header) and
+     * {@link #getAttestationStatus()} says why an attestation the agent DID
+     * present was not accepted ({@code already_consumed}, {@code action_mismatch},
+     * {@code expired}, {@code not_confirmed}).
+     *
+     * <p>A malformed {@code confirmation} block never reaches this type: it is
+     * refused as a plain {@link ActiveErrorDenial} with no confirmation block,
+     * so a broken ceremony cannot become an allow.
+     */
+    public static class ConfirmationRequiredDenial extends ActiveErrorDenial {
+        /** The hosted ceremony staged for this exact action. */
+        private final ActionConfirmation confirmation;
+        /** Why a presented attestation was not accepted, or null when none was presented. */
+        private final String attestationStatus;
+
+        /**
+         * Create a new ConfirmationRequiredDenial. Status is always 403 and
+         * the error code is always {@code confirmation_required}.
+         *
+         * @param message           human-readable refusal description
+         * @param responseBody      canonical JSON denial body, carrying the confirmation block
+         * @param confirmation      the staged hosted ceremony for this action
+         * @param attestationStatus why a presented attestation was rejected, or {@code null}
+         */
+        public ConfirmationRequiredDenial(String message, String responseBody,
+                                          ActionConfirmation confirmation, String attestationStatus) {
+            super(message, "confirmation_required", responseBody);
+            this.confirmation = confirmation;
+            this.attestationStatus = attestationStatus;
+        }
+
+        /**
+         * Get the staged confirmation ceremony for this exact action.
+         * @return the confirmation block (never {@code null} for this type)
+         */
+        public ActionConfirmation getConfirmation() { return confirmation; }
+
+        /**
+         * Get the reason a presented attestation was not accepted.
+         * @return e.g. {@code action_mismatch}, or {@code null} when no attestation was presented
+         */
+        public String getAttestationStatus() { return attestationStatus; }
+    }
+
+    // -------------------------------------------------------------------------
     // RateLimitError — nested static class
     // -------------------------------------------------------------------------
 

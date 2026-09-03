@@ -30,6 +30,11 @@ public class IntrospectionClient {
     /** Hard cap (ms) on cumulative wait across all retries of a single verify call. */
     static final long MAX_RETRY_BUDGET_MS = 120_000L;
 
+    /** Canonical description for a confirm-each-time refusal (1.11.0). */
+    static final String CONFIRMATION_REQUIRED_DESCRIPTION =
+        "This action requires a fresh human confirmation. Give the confirmation link to the user, "
+        + "then retry with the X-AgentAdmit-Action-Attestation header.";
+
     private final AgentAdmitConfig config;
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
@@ -225,7 +230,14 @@ public class IntrospectionClient {
                 // isPresenceVerified() then reports false (fail closed).
                 Presence presence = Presence.fromVerifyData(data.get("presence"));
 
-                return new IntrospectionResult(userId, connectionId, scopes, agentLabel, sub, role, appId, jti, exp, consent, presence, purpose, userIntent);
+                // Confirm-each-time (1.11.0): present only when THIS call was
+                // accepted because the hosted service consumed a human
+                // confirmation for exactly this action. Strict — a string
+                // session id AND consumed: true, or nothing at all.
+                ActionConfirmation.Consumed actionConfirmation =
+                    ActionConfirmation.Consumed.fromVerifyData(data.get("action_confirmation"));
+
+                return new IntrospectionResult(userId, connectionId, scopes, agentLabel, sub, role, appId, jti, exp, consent, presence, purpose, userIntent, actionConfirmation);
             } catch (AgentAdmitException e) {
                 throw e;
             } catch (Exception e) {
@@ -265,6 +277,12 @@ public class IntrospectionClient {
      *       the declared {@code scope_used} telemetry otherwise.</li>
      *   <li>{@code bound_exceeded} — hosted {@code error_description},
      *       {@code bound}, and {@code renewal} passed through verbatim.</li>
+     *   <li>{@code confirmation_required} — confirm-each-time (1.11.0):
+     *       {@code {error, error_description, confirmation?, attestation_status?,
+     *       attestation_description?, renewal?}}. A strictly parsed
+     *       {@code confirmation} block produces an
+     *       {@link AgentAdmitException.ConfirmationRequiredDenial}; a malformed
+     *       one is refused generically with no confirmation block.</li>
      *   <li>any other code — generic fail-closed refusal.</li>
      * </ul>
      */
@@ -272,6 +290,8 @@ public class IntrospectionClient {
             String errorCode, Map<String, Object> data, VerifyTelemetry telemetry) {
         Map<String, Object> body = new java.util.LinkedHashMap<>();
         String message;
+        ActionConfirmation confirmation = null;
+        String attestationStatus = null;
         switch (errorCode) {
             case "insufficient_scope" -> {
                 body.put("error", "insufficient_scope");
@@ -296,6 +316,25 @@ public class IntrospectionClient {
                 if (data.containsKey("bound")) body.put("bound", data.get("bound"));
                 if (data.containsKey("renewal")) body.put("renewal", data.get("renewal"));
             }
+            case "confirmation_required" -> {
+                // Confirm-each-time (1.11.0): the scope IS granted but this
+                // call needs a fresh human confirmation. Pass the staged
+                // ceremony through so the agent can hand the link to the
+                // human; nothing else from the wire.
+                body.put("error", "confirmation_required");
+                message = data.get("error_description") instanceof String d ? d : CONFIRMATION_REQUIRED_DESCRIPTION;
+                body.put("error_description", message);
+                confirmation = ActionConfirmation.fromVerifyData(data.get("confirmation"));
+                if (confirmation != null) body.put("confirmation", confirmation.toWireMap());
+                if (data.get("attestation_status") instanceof String as) {
+                    attestationStatus = as;
+                    body.put("attestation_status", as);
+                }
+                if (data.get("attestation_description") instanceof String ad) {
+                    body.put("attestation_description", ad);
+                }
+                if (data.get("renewal") instanceof String r) body.put("renewal", r);
+            }
             default -> {
                 body.put("error", errorCode);
                 message = "Call refused by the authorization service.";
@@ -310,6 +349,12 @@ public class IntrospectionClient {
             // to a minimal well-formed denial body.
             json = "{\"error\":\"introspection_denied\"}";
         }
+        if (confirmation != null) {
+            return new AgentAdmitException.ConfirmationRequiredDenial(
+                message, json, confirmation, attestationStatus);
+        }
+        // A confirmation_required whose block is absent or malformed falls
+        // through to the generic denial: fail closed, no confirmation block.
         return new AgentAdmitException.ActiveErrorDenial(message, errorCode, json);
     }
 
@@ -330,6 +375,13 @@ public class IntrospectionClient {
             if (telemetry.endpoint() != null) body.put("endpoint", telemetry.endpoint());
             if (telemetry.method() != null) body.put("method", telemetry.method());
             if (telemetry.consentFirst()) body.put("consent_first", true);
+            // Confirm-each-time (1.11.0): the agent's attestation on its retry,
+            // the request-body digest, and the app's plain-language summary.
+            if (telemetry.actionAttestationId() != null) {
+                body.put("action_attestation_id", telemetry.actionAttestationId());
+            }
+            if (telemetry.requestDigest() != null) body.put("request_digest", telemetry.requestDigest());
+            if (telemetry.actionSummary() != null) body.put("action_summary", telemetry.actionSummary());
         }
         return objectMapper.writeValueAsString(body);
     }
@@ -456,6 +508,10 @@ public class IntrospectionClient {
      *                     the app's words). Review-time record only, never an
      *                     enforcement input; authorization decisions ride scopes,
      *                     connection status, and consent.
+     * @param actionConfirmation confirm-each-time (1.11.0): the human confirmation
+     *                     the hosted service CONSUMED to allow this exact call
+     *                     (null when this call rode the standing grant alone).
+     *                     Strictly parsed; see {@link ActionConfirmation.Consumed}.
      */
     public record IntrospectionResult(
         String userId,
@@ -470,8 +526,35 @@ public class IntrospectionClient {
         Map<String, Object> consent,
         Presence presence,
         String purpose,
-        String userIntent
+        String userIntent,
+        ActionConfirmation.Consumed actionConfirmation
     ) {
+        /**
+         * Backward-compatible constructor for results without a consumed
+         * confirm-each-time confirmation.
+         *
+         * @param userId       the end user's identifier
+         * @param connectionId the AgentAdmit connection identifier
+         * @param scopes       list of granted scope strings
+         * @param agentLabel   human-readable agent display name
+         * @param sub          token subject
+         * @param role         the user's role granted on the connection
+         * @param appId        the AgentAdmit application identifier
+         * @param jti          unique JWT ID of the access token
+         * @param exp          token expiry as a Unix timestamp (0 if absent)
+         * @param consent      Consent Ledger verdict (null if absent)
+         * @param presence     human-presence fact (null if absent or malformed)
+         * @param purpose      declared purpose (null if absent)
+         * @param userIntent   user-declared intent (null if absent)
+         */
+        public IntrospectionResult(
+                String userId, String connectionId, List<String> scopes, String agentLabel,
+                String sub, String role, String appId, String jti, long exp,
+                Map<String, Object> consent, Presence presence, String purpose, String userIntent) {
+            this(userId, connectionId, scopes, agentLabel, sub, role, appId, jti, exp,
+                consent, presence, purpose, userIntent, null);
+        }
+
         /**
          * Check whether a specific scope was granted.
          *
