@@ -36,11 +36,17 @@ public class AgentAdmitConfig {
     /** Your AgentAdmit API key (e.g. {@code "aa_live_xxxx"}). */
     private String apiKey = "";
 
+    /** Default hosted verify endpoint. */
+    static final String DEFAULT_VERIFY_URL = "https://api.agentadmit.com/api/v1/verify";
+
+    /** Default hosted API base. */
+    static final String DEFAULT_API_URL = "https://api.agentadmit.com";
+
     /** Token verification endpoint URL. */
-    private String verifyUrl = "https://api.agentadmit.com/api/v1/verify";
+    private String verifyUrl = DEFAULT_VERIFY_URL;
 
     /** Base API URL for AgentAdmit services. */
-    private String apiUrl = "https://api.agentadmit.com";
+    private String apiUrl = DEFAULT_API_URL;
 
     /** Prefix identifying AgentAdmit access tokens. */
     private String tokenPrefixAccess = "ag_at_";
@@ -83,9 +89,35 @@ public class AgentAdmitConfig {
 
     /**
      * Get the token verification endpoint URL.
+     *
+     * <p>One hosted-service origin, not two: when {@code apiUrl} points
+     * somewhere other than production (staging, a local rig) and
+     * {@code verifyUrl} was left at its default, the verify URL is DERIVED
+     * from {@code apiUrl} ({@code <api-url>/api/v1/verify}). Without this the
+     * app talks to one service for everything except the per-call verify,
+     * which silently goes to production — caught on the TrainerTracer dogfood
+     * rig, Sep 3 2026. An explicitly configured {@code verifyUrl} always wins.
+     *
      * @return the verify URL
      */
-    public String getVerifyUrl() { return verifyUrl; }
+    public String getVerifyUrl() {
+        if (DEFAULT_VERIFY_URL.equals(verifyUrl)) {
+            String base = stripTrailingSlash(apiUrl);
+            if (base != null && !base.isEmpty() && !DEFAULT_API_URL.equals(base)) {
+                return base + "/api/v1/verify";
+            }
+        }
+        return verifyUrl;
+    }
+
+    private static String stripTrailingSlash(String url) {
+        if (url == null) return null;
+        String trimmed = url;
+        while (trimmed.endsWith("/")) {
+            trimmed = trimmed.substring(0, trimmed.length() - 1);
+        }
+        return trimmed;
+    }
     /**
      * Set the token verification endpoint URL.
      * Non-HTTPS URLs are rejected unless the host is {@code localhost},

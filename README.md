@@ -230,6 +230,99 @@ classes receive no scope-state disclosure.
 
 The hosted service also refuses calls it cannot honor even when the token itself is valid — for example when a required scope is not granted (`insufficient_scope`) or a bounded capability is exhausted (`bound_exceeded`). The SDK treats any `active: true` response that carries an `error` code as a denial: the filter writes a 403 with the canonical body for that code and the request never reaches your handler. Unknown refusal codes fail closed the same way, so new hosted enforcement features deny by default instead of passing through.
 
+## Confirm Each Time (Exercise-Time Human Confirmation)
+
+Some actions should never run on a standing grant alone: moving money, sending
+or publishing on the user's behalf, deleting data, touching production. Mark
+those scopes `confirm_each_time: true` when you register them, and the hosted
+service requires a fresh human confirmation for every call that exercises
+them, even inside a valid connection.
+
+How a call flows:
+
+1. The agent calls your route. `AgentAdmitFilter` verifies the token as usual,
+   carrying the exercised scope, a `sha256:` digest of the raw request body,
+   and the plain-language action summary you supply.
+2. The hosted service refuses the first call with `confirmation_required` and
+   stages a one-time ceremony for exactly that action. The filter returns 403
+   with a `confirmation` block; the agent gives `confirmation.action_session_url`
+   to the user.
+3. The user confirms on AgentAdmit's hosted page with their passkey. The
+   signature commits to the scope, method, endpoint, request digest, and the
+   summary they saw. Only a user-verified ceremony produces an attestation; the
+   agent cannot complete it.
+4. The agent retries the same request with the header
+   `X-AgentAdmit-Action-Attestation: <action_session_id>`. The SDK forwards it,
+   the hosted service consumes the attestation once (exact action only), and
+   the call proceeds. The audit row names the confirmation.
+
+Register the filter with an action summary for the routes whose scopes are
+confirm-each-time:
+
+```java
+@Bean
+AgentAdmitFilter agentAdmitFilter(AgentAdmitConfig config,
+                                  IntrospectionClient introspectionClient,
+                                  RequiredScopeResolver scopeResolver) {
+    return new AgentAdmitFilter(config, introspectionClient, scopeResolver,
+        AgentAdmitFilter.Options.withActionSummary((request, body) ->
+            "Pay " + trainerOf(body) + " $" + amountOf(body)));
+}
+```
+
+`ActionSummary.describe(HttpServletRequest, byte[] body)` receives the request
+and the RAW body bytes, already cached — the filter wraps the request so your
+controller still reads the same body. Return `null` to send no summary. The
+attestation header is forwarded on every verify call whether or not a summary
+is configured, so an agent retrying after a confirmation always spends its
+attestation.
+
+The refusal reaches the agent as a 403:
+
+```json
+{
+  "error": "confirmation_required",
+  "error_description": "This action requires a fresh human confirmation. Give the confirmation link to the user, then retry with the X-AgentAdmit-Action-Attestation header.",
+  "confirmation": {
+    "action_session_id": "asess_abc",
+    "action_session_url": "https://agentadmit.com/confirm/action/asess_abc",
+    "expires_at": "2026-09-02T18:30:00.000Z",
+    "scope": "write:payments",
+    "method": "POST",
+    "endpoint": "/api/payments",
+    "request_digest": "sha256:...",
+    "summary": "Pay Alex $50"
+  },
+  "attestation_status": "action_mismatch"
+}
+```
+
+Building your own gate? `IntrospectionClient.verify` throws
+`AgentAdmitException.ConfirmationRequiredDenial` — an `ActiveErrorDenial`, so
+existing fail-closed handling keeps working — carrying the typed
+`ActionConfirmation` and `getAttestationStatus()` (`already_consumed`,
+`action_mismatch`, `expired`, `not_confirmed`). A malformed `confirmation`
+block never becomes an allow: it is refused as a generic 403 with no block.
+
+When a call IS accepted because a confirmation was spent, the consumed
+ceremony is surfaced as the `agentadmit.actionConfirmation` request attribute
+and on `IntrospectionResult.actionConfirmation()`, typed
+`ActionConfirmation.Consumed`, and only when the hosted block is strictly a
+string session id with `consumed: true`. An app running its own transaction
+step-up can treat it as that confirmation instead of asking the human twice.
+
+Notes:
+
+- The summary is yours. AgentAdmit shows it as the headline of the confirmation
+  page and commits to the text shown; it does not verify the description
+  against the request.
+- A confirmation covers exactly one call. A retry with a different body, route,
+  method, or summary is refused again with `attestation_status: "action_mismatch"`.
+- Confirmation only applies when the call declares the exercised scope, which
+  the auto-configured `RequiredScopeResolver` does for `@RequireScope` routes.
+- Pointing `agentadmit.api-url` at a staging service or local rig now derives
+  the verify URL too, unless you set `agentadmit.verify-url` explicitly.
+
 ## Rate Limiting
 
 The AgentAdmit introspection endpoint enforces rate limits. The Java SDK handles HTTP 429 responses **automatically** with exponential backoff and jitter  --  no changes needed in your filter or aspect code.
