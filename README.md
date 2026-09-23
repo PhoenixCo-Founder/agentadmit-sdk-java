@@ -304,6 +304,20 @@ existing fail-closed handling keeps working — carrying the typed
 `action_mismatch`, `expired`, `not_confirmed`). A malformed `confirmation`
 block never becomes an allow: it is refused as a generic 403 with no block.
 
+**The user can decline.** If the user taps Decline on the hosted page, the
+hosted service answers the agent's retry with `confirmation_declined` and
+holds that answer until `declined.hold_until`; no new ceremony is staged and
+the user is not notified again. The filter writes a 403 with the strictly
+typed `declined` block (`action_session_id`, `declined_at`, `hold_until`,
+`scope`, plus nullable `method`, `endpoint`, `request_digest`, `summary`) and
+`renewal`; `IntrospectionClient.verify` throws
+`AgentAdmitException.ConfirmationDeclinedDenial` (an `ActiveErrorDenial`)
+carrying the typed `ActionDecline` and `getAttestationStatus()`. Agents should
+relay the decline to the user and not retry unless the user asks; only the
+user can lift a decline, and after the hold ends a retry stages a fresh
+confirmation. A malformed `declined` block is refused as a generic 403 with no
+block.
+
 When a call IS accepted because a confirmation was spent, the consumed
 ceremony is surfaced as the `agentadmit.actionConfirmation` request attribute
 and on `IntrospectionResult.actionConfirmation()`, typed
