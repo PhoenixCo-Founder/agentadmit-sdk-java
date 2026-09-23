@@ -35,6 +35,11 @@ public class IntrospectionClient {
         "This action requires a fresh human confirmation. Give the confirmation link to the user, "
         + "then retry with the X-AgentAdmit-Action-Attestation header.";
 
+    /** Fallback {@code error_description} for a {@code confirmation_declined} refusal. */
+    static final String CONFIRMATION_DECLINED_DESCRIPTION =
+        "The user declined this action on the hosted confirmation page. "
+            + "Do not retry it unless the user asks you to.";
+
     private final AgentAdmitConfig config;
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
@@ -283,6 +288,13 @@ public class IntrospectionClient {
      *       {@code confirmation} block produces an
      *       {@link AgentAdmitException.ConfirmationRequiredDenial}; a malformed
      *       one is refused generically with no confirmation block.</li>
+     *   <li>{@code confirmation_declined} — confirm-each-time (1.12.0): the
+     *       user declined this exact action on the hosted page;
+     *       {@code {error, error_description, declined?, attestation_status?,
+     *       attestation_description?, renewal?}}. A strictly parsed
+     *       {@code declined} block produces an
+     *       {@link AgentAdmitException.ConfirmationDeclinedDenial}; a malformed
+     *       one is refused generically with no decline block.</li>
      *   <li>any other code — generic fail-closed refusal.</li>
      * </ul>
      */
@@ -291,6 +303,7 @@ public class IntrospectionClient {
         Map<String, Object> body = new java.util.LinkedHashMap<>();
         String message;
         ActionConfirmation confirmation = null;
+        ActionDecline declined = null;
         String attestationStatus = null;
         switch (errorCode) {
             case "insufficient_scope" -> {
@@ -335,6 +348,25 @@ public class IntrospectionClient {
                 }
                 if (data.get("renewal") instanceof String r) body.put("renewal", r);
             }
+            case "confirmation_declined" -> {
+                // Confirm-each-time (1.12.0): the user declined exactly this
+                // action on the hosted page and the hold still runs. Relay
+                // the decline so the agent can tell the user instead of
+                // nagging with a link; nothing else from the wire.
+                body.put("error", "confirmation_declined");
+                message = data.get("error_description") instanceof String d ? d : CONFIRMATION_DECLINED_DESCRIPTION;
+                body.put("error_description", message);
+                declined = ActionDecline.fromVerifyData(data.get("declined"));
+                if (declined != null) body.put("declined", declined.toWireMap());
+                if (data.get("attestation_status") instanceof String as) {
+                    attestationStatus = as;
+                    body.put("attestation_status", as);
+                }
+                if (data.get("attestation_description") instanceof String ad) {
+                    body.put("attestation_description", ad);
+                }
+                if (data.get("renewal") instanceof String r) body.put("renewal", r);
+            }
             default -> {
                 body.put("error", errorCode);
                 message = "Call refused by the authorization service.";
@@ -352,6 +384,10 @@ public class IntrospectionClient {
         if (confirmation != null) {
             return new AgentAdmitException.ConfirmationRequiredDenial(
                 message, json, confirmation, attestationStatus);
+        }
+        if (declined != null) {
+            return new AgentAdmitException.ConfirmationDeclinedDenial(
+                message, json, declined, attestationStatus);
         }
         // A confirmation_required whose block is absent or malformed falls
         // through to the generic denial: fail closed, no confirmation block.

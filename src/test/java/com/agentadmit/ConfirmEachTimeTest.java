@@ -48,6 +48,22 @@ class ConfirmEachTimeTest {
             + "\"renewal\":\"The human confirms on the hosted page with their passkey.\","
             + "\"scopes\":[\"leak\"],\"user_id\":\"u1\"}";
 
+    private static final String DECLINED_JSON =
+        "{\"action_session_id\":\"asess_abc\","
+            + "\"declined_at\":\"2026-09-22T21:35:42.000Z\","
+            + "\"hold_until\":\"2026-09-22T21:50:42.000Z\","
+            + "\"scope\":\"write:payments\",\"method\":\"POST\",\"endpoint\":\"/api/payments\","
+            + "\"request_digest\":\"sha256:deadbeef\",\"summary\":\"Pay Alex $50\"}";
+
+    private static final String CONFIRMATION_DECLINED_BODY =
+        "{\"active\":true,\"error\":\"confirmation_declined\","
+            + "\"error_description\":\"The user declined this action on the hosted confirmation page. Do not retry it unless the user asks you to; no new confirmation can be staged for this action until 2026-09-22T21:50:42.000Z.\","
+            + "\"declined\":" + DECLINED_JSON + ","
+            + "\"attestation_status\":\"declined\","
+            + "\"attestation_description\":\"The user declined this action.\","
+            + "\"renewal\":\"Only the user can lift a decline. After the hold ends, a retry stages a fresh confirmation for them to approve or decline again.\","
+            + "\"scopes\":[\"leak\"],\"user_id\":\"u1\"}";
+
     private static final String ACTIVE_BODY =
         "{\"active\":true,\"user_id\":\"user_1\",\"connection_id\":\"conn_1\","
             + "\"scopes\":[\"write:payments\"],\"agent_label\":\"Test Agent\"}";
@@ -447,5 +463,99 @@ class ConfirmEachTimeTest {
 
         assertTrue(telemetry.consentFirst());
         assertEquals("asess_abc", telemetry.actionAttestationId());
+    }
+
+    // -------------------------------------------------------------------------
+    // confirmation_declined (1.12.0): the user's explicit no, relayed typed
+    // -------------------------------------------------------------------------
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void confirmationDeclinedIs403CarryingTheDeclineBlockAndNothingElse() throws Exception {
+        CapturingClient client = new CapturingClient(stubResponse(200, CONFIRMATION_DECLINED_BODY));
+        AgentAdmitFilter filter = new AgentAdmitFilter(configWith(), client, r -> "write:payments");
+        MockFilterChain chain = new MockFilterChain();
+        MockHttpServletResponse resp = new MockHttpServletResponse();
+
+        filter.doFilter(agentPost("/api/payments", "{\"amount\":50}"), resp, chain);
+
+        assertNull(chain.getRequest(), "a declined action never reaches the app");
+        assertEquals(403, resp.getStatus());
+        Map<String, Object> body = MAPPER.readValue(resp.getContentAsString(), Map.class);
+        assertEquals("confirmation_declined", body.get("error"));
+        assertTrue(((String) body.get("error_description")).contains("Do not retry"));
+        Map<String, Object> declined = (Map<String, Object>) body.get("declined");
+        assertEquals("asess_abc", declined.get("action_session_id"));
+        assertEquals("2026-09-22T21:35:42.000Z", declined.get("declined_at"));
+        assertEquals("2026-09-22T21:50:42.000Z", declined.get("hold_until"));
+        assertEquals("write:payments", declined.get("scope"));
+        assertEquals("Pay Alex $50", declined.get("summary"));
+        assertEquals("declined", body.get("attestation_status"));
+        assertTrue(((String) body.get("renewal")).contains("Only the user"));
+        assertFalse(body.containsKey("confirmation"));
+        assertFalse(body.containsKey("scopes"), "wire fields never leak into the denial");
+        assertFalse(body.containsKey("user_id"));
+    }
+
+    @Test
+    void confirmationDeclinedThrowsTheTypedDenialFromTheVerifyClient() {
+        CapturingClient client = new CapturingClient(stubResponse(200, CONFIRMATION_DECLINED_BODY));
+
+        AgentAdmitException.ConfirmationDeclinedDenial denial =
+            assertThrows(AgentAdmitException.ConfirmationDeclinedDenial.class,
+                () -> client.verify("ag_at_dummy_token", VerifyTelemetry.of("write:payments", "/api/payments", "POST")));
+
+        AgentAdmitException.ActiveErrorDenial asBase = denial;
+        assertFalse(asBase instanceof AgentAdmitException.ConfirmationRequiredDenial,
+            "a decline is never the confirmation-required type");
+        assertEquals(403, denial.getStatusCode());
+        assertEquals("confirmation_declined", denial.getErrorCode());
+        assertEquals("declined", denial.getAttestationStatus());
+        ActionDecline d = denial.getDeclined();
+        assertEquals("asess_abc", d.actionSessionId());
+        assertEquals("2026-09-22T21:50:42.000Z", d.holdUntil());
+        assertEquals("POST", d.method());
+        assertEquals("sha256:deadbeef", d.requestDigest());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void malformedDeclineBlockFailsClosedWithNoBlockAndDefaultDescription() throws Exception {
+        String malformed = "{\"active\":true,\"error\":\"confirmation_declined\","
+            + "\"declined\":{\"action_session_id\":\"asess_abc\",\"hold_until\":7,"
+            + "\"declined_at\":\"d\",\"scope\":\"s\"}}";
+        CapturingClient client = new CapturingClient(stubResponse(200, malformed));
+        AgentAdmitFilter filter = new AgentAdmitFilter(configWith(), client, r -> "write:payments");
+        MockFilterChain chain = new MockFilterChain();
+        MockHttpServletResponse resp = new MockHttpServletResponse();
+
+        filter.doFilter(agentPost("/api/payments", "{}"), resp, chain);
+
+        assertNull(chain.getRequest());
+        assertEquals(403, resp.getStatus());
+        Map<String, Object> body = MAPPER.readValue(resp.getContentAsString(), Map.class);
+        assertEquals("confirmation_declined", body.get("error"));
+        assertTrue(((String) body.get("error_description")).contains("unless the user asks"));
+        assertFalse(body.containsKey("declined"), "a malformed decline is never relayed");
+
+        AgentAdmitException.ActiveErrorDenial denial =
+            assertThrows(AgentAdmitException.ActiveErrorDenial.class,
+                () -> client.verify("ag_at_dummy_token", VerifyTelemetry.of("write:payments", "/p", "POST")));
+        assertFalse(denial instanceof AgentAdmitException.ConfirmationDeclinedDenial);
+    }
+
+    @Test
+    void strictParsingOfTheDeclineBlock() {
+        assertNull(ActionDecline.fromVerifyData(null));
+        assertNull(ActionDecline.fromVerifyData("not-an-object"));
+        assertNull(ActionDecline.fromVerifyData(Map.of("action_session_id", "a", "declined_at", "d", "scope", "s")));
+        ActionDecline minimal = ActionDecline.fromVerifyData(Map.of(
+            "action_session_id", "a", "declined_at", "d", "hold_until", "h", "scope", "s", "method", 4));
+        assertNotNull(minimal);
+        assertEquals("h", minimal.holdUntil());
+        assertNull(minimal.method());
+        assertNull(minimal.endpoint());
+        assertNull(minimal.requestDigest());
+        assertNull(minimal.summary());
     }
 }

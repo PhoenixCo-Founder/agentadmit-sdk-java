@@ -144,6 +144,64 @@ public class AgentAdmitException extends RuntimeException {
     }
 
     // -------------------------------------------------------------------------
+    // ConfirmationDeclinedDenial — nested static class
+    // -------------------------------------------------------------------------
+
+    /**
+     * Confirm-each-time (1.12.0): the refusal {@code confirmation_declined}.
+     *
+     * <p>The user declined exactly this action on the hosted confirmation
+     * page and the hosted service holds that answer until
+     * {@code getDeclined().holdUntil()}. No new ceremony is staged and the
+     * user is not notified again while the hold runs.
+     *
+     * <p>An {@link ActiveErrorDenial}, so every gate that already fails closed
+     * on hosted refusals keeps doing so unchanged (403, canonical body, chain
+     * not continued). The extra typing is for custom gates that want to relay
+     * the decline to the user instead of nagging with a link:
+     * {@link #getDeclined()} is the typed {@link ActionDecline} and
+     * {@link #getAttestationStatus()} says why an attestation the agent DID
+     * present was not accepted (e.g. {@code declined}).
+     *
+     * <p>A malformed {@code declined} block never reaches this type: it is
+     * refused as a plain {@link ActiveErrorDenial} with no decline block.
+     */
+    public static class ConfirmationDeclinedDenial extends ActiveErrorDenial {
+        /** The decline the hosted service is holding for this exact action. */
+        private final ActionDecline declined;
+        /** Why a presented attestation was not accepted, or null when none was presented. */
+        private final String attestationStatus;
+
+        /**
+         * Create a new ConfirmationDeclinedDenial. Status is always 403 and
+         * the error code is always {@code confirmation_declined}.
+         *
+         * @param message           human-readable refusal description
+         * @param responseBody      canonical JSON denial body, carrying the declined block
+         * @param declined          the typed decline for this action
+         * @param attestationStatus why a presented attestation was rejected, or {@code null}
+         */
+        public ConfirmationDeclinedDenial(String message, String responseBody,
+                                          ActionDecline declined, String attestationStatus) {
+            super(message, "confirmation_declined", responseBody);
+            this.declined = declined;
+            this.attestationStatus = attestationStatus;
+        }
+
+        /**
+         * Get the decline the hosted service is holding for this exact action.
+         * @return the declined block (never {@code null} for this type)
+         */
+        public ActionDecline getDeclined() { return declined; }
+
+        /**
+         * Get the reason a presented attestation was not accepted.
+         * @return e.g. {@code declined}, or {@code null} when no attestation was presented
+         */
+        public String getAttestationStatus() { return attestationStatus; }
+    }
+
+    // -------------------------------------------------------------------------
     // RateLimitError — nested static class
     // -------------------------------------------------------------------------
 
