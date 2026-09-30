@@ -48,6 +48,14 @@ class ConfirmEachTimeTest {
             + "\"renewal\":\"The human confirms on the hosted page with their passkey.\","
             + "\"scopes\":[\"leak\"],\"user_id\":\"u1\"}";
 
+    private static final String ALREADY_CONSUMED_BODY =
+        "{\"active\":true,\"error\":\"confirmation_required\","
+            + "\"confirmation\":" + CONFIRMATION_JSON + ","
+            + "\"attestation_status\":\"already_consumed\","
+            + "\"consumed_receipt\":{\"consumed_at\":\"2026-09-29T20:53:42.000Z\","
+            + "\"connection_id\":\"conn_abc\",\"chain_seq\":1040,\"row_hash\":\"hash_abc\"},"
+            + "\"scopes\":[\"leak\"],\"user_id\":\"u1\"}";
+
     private static final String DECLINED_JSON =
         "{\"action_session_id\":\"asess_abc\","
             + "\"declined_at\":\"2026-09-22T21:35:42.000Z\","
@@ -178,6 +186,34 @@ class ConfirmEachTimeTest {
         assertEquals("/api/payments", c.endpoint());
         assertEquals("sha256:deadbeef", c.requestDigest());
         assertEquals("Pay Alex $50", c.summary());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void alreadyConsumedReceiptIsTypedAndRelayedAsDiagnosticOnly() throws Exception {
+        CapturingClient client = new CapturingClient(stubResponse(200, ALREADY_CONSUMED_BODY));
+        AgentAdmitFilter filter = new AgentAdmitFilter(configWith(), client, r -> "write:payments");
+        MockHttpServletResponse resp = new MockHttpServletResponse();
+
+        filter.doFilter(agentPost("/api/payments", "{\"amount\":50}"), resp, new MockFilterChain());
+
+        assertEquals(403, resp.getStatus());
+        Map<String, Object> body = MAPPER.readValue(resp.getContentAsString(), Map.class);
+        assertEquals("already_consumed", body.get("attestation_status"));
+        Map<String, Object> receipt = (Map<String, Object>) body.get("consumed_receipt");
+        assertEquals("2026-09-29T20:53:42.000Z", receipt.get("consumed_at"));
+        assertEquals("conn_abc", receipt.get("connection_id"));
+        assertEquals(1040, receipt.get("chain_seq"));
+        assertEquals("hash_abc", receipt.get("row_hash"));
+
+        AgentAdmitException.ConfirmationRequiredDenial denial =
+            assertThrows(AgentAdmitException.ConfirmationRequiredDenial.class,
+                () -> client.verify("ag_at_dummy_token", VerifyTelemetry.of("write:payments", "/api/payments", "POST")));
+        ActionConfirmation.ConsumedReceipt typed = denial.getConsumedReceipt();
+        assertNotNull(typed);
+        assertEquals("conn_abc", typed.connectionId());
+        assertEquals(1040L, typed.chainSeq());
+        assertEquals("already_consumed", denial.getAttestationStatus());
     }
 
     @Test

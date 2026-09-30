@@ -113,6 +113,8 @@ public class AgentAdmitException extends RuntimeException {
         private final ActionConfirmation confirmation;
         /** Why a presented attestation was not accepted, or null when none was presented. */
         private final String attestationStatus;
+        /** Response-loss diagnostic for already-consumed attestations, or null. */
+        private final ActionConfirmation.ConsumedReceipt consumedReceipt;
 
         /**
          * Create a new ConfirmationRequiredDenial. Status is always 403 and
@@ -125,9 +127,26 @@ public class AgentAdmitException extends RuntimeException {
          */
         public ConfirmationRequiredDenial(String message, String responseBody,
                                           ActionConfirmation confirmation, String attestationStatus) {
+            this(message, responseBody, confirmation, attestationStatus, null);
+        }
+
+        /**
+         * Create a new ConfirmationRequiredDenial with an optional consumed
+         * receipt diagnostic for {@code attestation_status=already_consumed}.
+         *
+         * @param message           human-readable refusal description
+         * @param responseBody      canonical JSON denial body, carrying the confirmation block
+         * @param confirmation      the staged hosted ceremony for this action
+         * @param attestationStatus why a presented attestation was rejected, or {@code null}
+         * @param consumedReceipt   diagnostic receipt for an already-consumed attestation, or {@code null}
+         */
+        public ConfirmationRequiredDenial(String message, String responseBody,
+                                          ActionConfirmation confirmation, String attestationStatus,
+                                          ActionConfirmation.ConsumedReceipt consumedReceipt) {
             super(message, "confirmation_required", responseBody);
             this.confirmation = confirmation;
             this.attestationStatus = attestationStatus;
+            this.consumedReceipt = consumedReceipt;
         }
 
         /**
@@ -141,6 +160,16 @@ public class AgentAdmitException extends RuntimeException {
          * @return e.g. {@code action_mismatch}, or {@code null} when no attestation was presented
          */
         public String getAttestationStatus() { return attestationStatus; }
+
+        /**
+         * Get the response-loss diagnostic for an already consumed
+         * attestation. This names the audit row that consumed the attestation;
+         * it is not a fresh authorization and must not be used to run the
+         * action again.
+         *
+         * @return the consumed receipt, or {@code null} when absent
+         */
+        public ActionConfirmation.ConsumedReceipt getConsumedReceipt() { return consumedReceipt; }
     }
 
     // -------------------------------------------------------------------------

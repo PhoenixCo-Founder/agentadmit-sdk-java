@@ -230,6 +230,49 @@ classes receive no scope-state disclosure.
 
 The hosted service also refuses calls it cannot honor even when the token itself is valid — for example when a required scope is not granted (`insufficient_scope`) or a bounded capability is exhausted (`bound_exceeded`). The SDK treats any `active: true` response that carries an `error` code as a denial: the filter writes a 403 with the canonical body for that code and the request never reaches your handler. Unknown refusal codes fail closed the same way, so new hosted enforcement features deny by default instead of passing through.
 
+## Outcome Reporting
+
+Successful verify responses can include `audit_row_id`, exposed as
+`IntrospectionResult.auditRowId()` and the `agentadmit.auditRowId` request
+attribute. Use it to append what your app observed after the handler runs:
+
+```java
+IntrospectionClient.IntrospectionResult result = introspectionClient.verify(token);
+
+int status = callDownstream();
+IntrospectionClient.Outcome outcome = status < 400
+    ? IntrospectionClient.Outcome.EXECUTED
+    : IntrospectionClient.Outcome.FAILED;
+
+introspectionClient.reportOutcome(
+    result.auditRowId(),
+    outcome,
+    IntrospectionClient.StatusClass.fromStatusCode(status));
+```
+
+`reportOutcome` posts `POST {apiURL}/api/v1/audit/{row}/outcome` with
+`outcome` (`executed`, `failed`, or explicit `unknown`) and optional
+`status_class` (`1xx` through `5xx`). The report appends a new audit row; it
+does not mutate the original verify row and it records what your app reported,
+not an independent proof of execution.
+
+For filter-managed routes, opt in to automatic post-handler reporting:
+
+```java
+new AgentAdmitFilter(
+    config,
+    introspectionClient,
+    scopeResolver,
+    AgentAdmitFilter.Options.withOutcomeReporting());
+```
+
+After `chain.doFilter` returns normally, the filter maps response status
+classes below 400 to `executed` and 400 or above to `failed`, then reports the
+observed class. It never reports `unknown` automatically, never reports when
+the handler aborts or no status class is observable, and outcome-reporting
+errors are logged without replacing your app's response. For confirm-each-time
+routes, use `Options.withActionSummaryAndOutcomeReporting(...)`.
+
 ## Confirm Each Time (Exercise-Time Human Confirmation)
 
 Some actions should never run on a standing grant alone: moving money, sending
@@ -303,6 +346,13 @@ existing fail-closed handling keeps working — carrying the typed
 `ActionConfirmation` and `getAttestationStatus()` (`already_consumed`,
 `action_mismatch`, `expired`, `not_confirmed`). A malformed `confirmation`
 block never becomes an allow: it is refused as a generic 403 with no block.
+
+If an attestation replay is refused with `attestation_status:
+"already_consumed"`, `ConfirmationRequiredDenial.getConsumedReceipt()` may
+carry the typed `ActionConfirmation.ConsumedReceipt` diagnostic naming the
+earlier audit row that consumed it. This is response-loss recovery evidence for
+the agent or human. It is not a fresh authorization and must not make the app
+execute the action again.
 
 **The user can decline.** If the user taps Decline on the hosted page, the
 hosted service answers the agent's retry with `confirmation_declined` and

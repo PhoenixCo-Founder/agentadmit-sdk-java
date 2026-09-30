@@ -44,6 +44,7 @@ import java.io.IOException;
  *   agentadmit.presence     -- {@link Presence} fact for the connection (null when absent)
  *   agentadmit.actionConfirmation -- {@link ActionConfirmation.Consumed} when the
  *       hosted service spent a confirm-each-time confirmation to allow this call
+ *   agentadmit.auditRowId -- hosted audit row id for the successful verify call
  *
  * <p><b>Confirm-each-time (1.11.0).</b> The agent's
  * {@value VerifyTelemetry#ACTION_ATTESTATION_HEADER} header is forwarded on
@@ -93,14 +94,30 @@ public class AgentAdmitFilter implements Filter {
      *        the raw request body and sends {@code request_digest} plus
      *        {@code action_summary} on the verify call. When unset, neither is
      *        sent — but the agent's attestation header is forwarded either way.
+     * @param reportOutcomeAfterResponse when true, the filter reports
+     *        {@code executed} for final response status codes below 400 and
+     *        {@code failed} for status codes 400 and above, after the app
+     *        response has completed normally. Aborted/missing responses are
+     *        never reported, and reporting failures are logged without
+     *        replacing the app response.
      */
-    public record Options(ActionSummary actionSummary) {
+    public record Options(ActionSummary actionSummary, boolean reportOutcomeAfterResponse) {
+        /**
+         * Backward-compatible constructor for callers that only configure an
+         * action summary.
+         *
+         * @param actionSummary describes the action for the human
+         */
+        public Options(ActionSummary actionSummary) {
+            this(actionSummary, false);
+        }
+
         /** Options that change nothing: no body digest, no action summary.
          *
          * @return default options
          */
         public static Options defaults() {
-            return new Options(null);
+            return new Options(null, false);
         }
 
         /**
@@ -110,7 +127,28 @@ public class AgentAdmitFilter implements Filter {
          * @return options carrying the summary supplier
          */
         public static Options withActionSummary(ActionSummary actionSummary) {
-            return new Options(actionSummary);
+            return new Options(actionSummary, false);
+        }
+
+        /**
+         * Options that automatically report app-observed outcomes after the
+         * downstream response completes.
+         *
+         * @return options enabling automatic outcome reporting
+         */
+        public static Options withOutcomeReporting() {
+            return new Options(null, true);
+        }
+
+        /**
+         * Options for a confirm-each-time route group that also reports the
+         * observed app response outcome.
+         *
+         * @param actionSummary describes the action for the human
+         * @return options carrying the summary supplier and outcome reporting
+         */
+        public static Options withActionSummaryAndOutcomeReporting(ActionSummary actionSummary) {
+            return new Options(actionSummary, true);
         }
     }
 
@@ -234,6 +272,9 @@ public class AgentAdmitFilter implements Filter {
                 if (result.actionConfirmation() != null) {
                     httpReq.setAttribute("agentadmit.actionConfirmation", result.actionConfirmation());
                 }
+                if (result.auditRowId() != null) {
+                    httpReq.setAttribute("agentadmit.auditRowId", result.auditRowId());
+                }
 
                 logger.debug("AgentAdmit: validated agent token for user={} scopes={}", 
                     result.userId(), result.scopes());
@@ -264,6 +305,12 @@ public class AgentAdmitFilter implements Filter {
         }
 
         chain.doFilter(request, response);
+
+        if (options.reportOutcomeAfterResponse()
+                && response instanceof HttpServletResponse httpResp
+                && request instanceof HttpServletRequest postReq) {
+            reportAutomaticOutcome(postReq, httpResp);
+        }
     }
 
     /**
@@ -296,6 +343,33 @@ public class AgentAdmitFilter implements Filter {
         } catch (RuntimeException e) {
             logger.debug("AgentAdmit: scope_used resolution failed; omitting from telemetry", e);
             return null;
+        }
+    }
+
+    /**
+     * Report the response outcome for an accepted AgentAdmit call after the
+     * application has completed its response. This deliberately runs only
+     * after {@code chain.doFilter} returns normally; exceptions or missing
+     * status codes mean there is no observed app response to report.
+     */
+    private void reportAutomaticOutcome(HttpServletRequest request, HttpServletResponse response) {
+        Object authType = request.getAttribute("agentadmit.authType");
+        Object auditRow = request.getAttribute("agentadmit.auditRowId");
+        if (!"agent".equals(authType) || !(auditRow instanceof String rowId) || rowId.isBlank()) {
+            return;
+        }
+        IntrospectionClient.StatusClass statusClass =
+            IntrospectionClient.StatusClass.fromStatusCode(response.getStatus());
+        if (statusClass == null) {
+            return;
+        }
+        IntrospectionClient.Outcome outcome = response.getStatus() < 400
+            ? IntrospectionClient.Outcome.EXECUTED
+            : IntrospectionClient.Outcome.FAILED;
+        try {
+            introspectionClient.reportOutcome(rowId, outcome, statusClass);
+        } catch (RuntimeException e) {
+            logger.debug("AgentAdmit: outcome reporting failed after app response; preserving response", e);
         }
     }
 }

@@ -147,4 +147,51 @@ public record ActionConfirmation(
             return new Consumed(actionSessionId);
         }
     }
+
+    /**
+     * Diagnostic receipt returned when an agent replays an action attestation
+     * id that was already consumed. This is response-loss recovery evidence:
+     * it names the earlier audit row that used the attestation, but it is NOT
+     * a fresh authorization and must not cause the app to run the action
+     * again.
+     *
+     * @param consumedAt   ISO-8601 timestamp of the earlier consumption
+     * @param connectionId connection whose audit row consumed the attestation
+     * @param chainSeq     audit-chain sequence, or {@code null} when unavailable
+     * @param rowHash      audit row hash, or {@code null} when unavailable
+     */
+    public record ConsumedReceipt(
+        String consumedAt,
+        String connectionId,
+        Long chainSeq,
+        String rowHash
+    ) {
+        /**
+         * Strictly parse the wire {@code consumed_receipt} diagnostic.
+         *
+         * @param raw the raw value from the verify refusal
+         * @return the receipt, or {@code null} when absent or malformed
+         */
+        static ConsumedReceipt fromVerifyData(Object raw) {
+            if (!(raw instanceof Map<?, ?> map)) {
+                return null;
+            }
+            if (!(map.get("consumed_at") instanceof String consumedAt)
+                    || !(map.get("connection_id") instanceof String connectionId)) {
+                return null;
+            }
+            Long chainSeq = null;
+            Object rawSeq = map.get("chain_seq");
+            if (rawSeq instanceof Number n) {
+                chainSeq = n.longValue();
+            } else if (rawSeq != null) {
+                return null;
+            }
+            Object rawHash = map.get("row_hash");
+            if (rawHash != null && !(rawHash instanceof String)) {
+                return null;
+            }
+            return new ConsumedReceipt(consumedAt, connectionId, chainSeq, (String) rawHash);
+        }
+    }
 }
