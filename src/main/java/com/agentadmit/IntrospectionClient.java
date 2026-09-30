@@ -196,6 +196,7 @@ public class IntrospectionClient {
                 String role = requireStringFieldIfPresent(data, "role");
                 String appId = requireStringFieldIfPresent(data, "app_id");
                 String jti = requireStringFieldIfPresent(data, "jti");
+                String auditRowId = requireStringFieldIfPresent(data, "audit_row_id");
                 // Declared purpose: the user-facing reason recorded on the
                 // grant at the consent moment. Review-time record only, never
                 // an enforcement input — so it follows the presence-block
@@ -242,7 +243,7 @@ public class IntrospectionClient {
                 ActionConfirmation.Consumed actionConfirmation =
                     ActionConfirmation.Consumed.fromVerifyData(data.get("action_confirmation"));
 
-                return new IntrospectionResult(userId, connectionId, scopes, agentLabel, sub, role, appId, jti, exp, consent, presence, purpose, userIntent, actionConfirmation);
+                return new IntrospectionResult(userId, connectionId, scopes, agentLabel, sub, role, appId, jti, exp, consent, presence, purpose, userIntent, actionConfirmation, auditRowId);
             } catch (AgentAdmitException e) {
                 throw e;
             } catch (Exception e) {
@@ -253,6 +254,83 @@ public class IntrospectionClient {
 
         // Should never be reached
         throw new AgentAdmitException("Unexpected exit from retry loop", 500);
+    }
+
+    /**
+     * Report what the app observed after a successful verify call.
+     *
+     * <p>This appends a separate {@code outcome_reported} audit row on the
+     * hosted service. It does not mutate the original verify row, and it is a
+     * report from your app, not AgentAdmit independently proving execution.
+     *
+     * @param auditRowId source audit row id returned by {@link IntrospectionResult#auditRowId()}
+     * @param outcome    app-observed outcome
+     * @return the outcome row summary returned by the hosted service
+     * @throws AgentAdmitException if the hosted service rejects or cannot record the report
+     */
+    public OutcomeReport reportOutcome(String auditRowId, Outcome outcome) throws AgentAdmitException {
+        return reportOutcome(auditRowId, outcome, null);
+    }
+
+    /**
+     * Report what the app observed after a successful verify call, including
+     * the HTTP response status class your app returned.
+     *
+     * @param auditRowId  source audit row id returned by {@link IntrospectionResult#auditRowId()}
+     * @param outcome     app-observed outcome
+     * @param statusClass observed response status class, or {@code null}
+     * @return the outcome row summary returned by the hosted service
+     * @throws AgentAdmitException if the hosted service rejects or cannot record the report
+     */
+    public OutcomeReport reportOutcome(String auditRowId, Outcome outcome, StatusClass statusClass)
+            throws AgentAdmitException {
+        if (auditRowId == null || auditRowId.isBlank()) {
+            throw new IllegalArgumentException("auditRowId is required");
+        }
+        if (outcome == null) {
+            throw new IllegalArgumentException("outcome is required");
+        }
+
+        try {
+            HttpResponse<String> response = sendOutcomeRequest(auditRowId, outcome, statusClass);
+            int status = response.statusCode();
+            Map<String, Object> data = objectMapper.readValue(response.body(), Map.class);
+
+            if (status < 200 || status > 299) {
+                String desc = data.get("error_description") instanceof String d
+                    ? d
+                    : (data.get("error") instanceof String e ? e : "Outcome report failed");
+                int surfaced = status == 401 || status == 403 || status == 404 || status == 409
+                    || status == 422 || status == 429 ? status : 502;
+                throw new AgentAdmitException(desc, surfaced);
+            }
+
+            String outcomeRowId = requireStringField(data, "outcome_row_id");
+            String outcomeValue = requireStringField(data, "outcome");
+            String statusClassValue = requireStringFieldIfPresent(data, "status_class");
+            String rowHash = requireStringFieldIfPresent(data, "row_hash");
+            String reportedAt = requireStringFieldIfPresent(data, "reported_at");
+            Long chainSeq = null;
+            if (data.get("chain_seq") instanceof Number n) {
+                chainSeq = n.longValue();
+            } else if (data.get("chain_seq") != null) {
+                throw new AgentAdmitException("Outcome response field 'chain_seq' must be a number", 502);
+            }
+            Outcome parsedOutcome = Outcome.fromWireValue(outcomeValue);
+            StatusClass parsedStatusClass = statusClassValue == null ? null : StatusClass.fromWireValue(statusClassValue);
+            if (statusClassValue != null && parsedStatusClass == null) {
+                throw new AgentAdmitException("Outcome response field 'status_class' is invalid", 502);
+            }
+            if (outcomeRowId == null || parsedOutcome == null) {
+                throw new AgentAdmitException("Outcome response malformed", 502);
+            }
+            return new OutcomeReport(outcomeRowId, parsedOutcome, parsedStatusClass, chainSeq, rowHash, reportedAt);
+        } catch (AgentAdmitException e) {
+            throw e;
+        } catch (Exception e) {
+            logger.error("AgentAdmit outcome report failed: {}", e.getMessage());
+            throw new AgentAdmitException("Outcome report failed: " + e.getMessage(), 502);
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -305,6 +383,7 @@ public class IntrospectionClient {
         ActionConfirmation confirmation = null;
         ActionDecline declined = null;
         String attestationStatus = null;
+        ActionConfirmation.ConsumedReceipt consumedReceipt = null;
         switch (errorCode) {
             case "insufficient_scope" -> {
                 body.put("error", "insufficient_scope");
@@ -342,6 +421,15 @@ public class IntrospectionClient {
                 if (data.get("attestation_status") instanceof String as) {
                     attestationStatus = as;
                     body.put("attestation_status", as);
+                }
+                consumedReceipt = ActionConfirmation.ConsumedReceipt.fromVerifyData(data.get("consumed_receipt"));
+                if (consumedReceipt != null) {
+                    Map<String, Object> receipt = new java.util.LinkedHashMap<>();
+                    receipt.put("consumed_at", consumedReceipt.consumedAt());
+                    receipt.put("connection_id", consumedReceipt.connectionId());
+                    receipt.put("chain_seq", consumedReceipt.chainSeq());
+                    receipt.put("row_hash", consumedReceipt.rowHash());
+                    body.put("consumed_receipt", receipt);
                 }
                 if (data.get("attestation_description") instanceof String ad) {
                     body.put("attestation_description", ad);
@@ -383,7 +471,7 @@ public class IntrospectionClient {
         }
         if (confirmation != null) {
             return new AgentAdmitException.ConfirmationRequiredDenial(
-                message, json, confirmation, attestationStatus);
+                message, json, confirmation, attestationStatus, consumedReceipt);
         }
         if (declined != null) {
             return new AgentAdmitException.ConfirmationDeclinedDenial(
@@ -446,6 +534,39 @@ public class IntrospectionClient {
         } catch (Exception e) {
             logger.error("AgentAdmit introspection network error: {}", e.getMessage());
             throw new AgentAdmitException("Introspection failed: " + e.getMessage(), 502);
+        }
+    }
+
+    /** Build the JSON request body for {@link #reportOutcome}. */
+    String buildOutcomeBody(Outcome outcome, StatusClass statusClass) throws Exception {
+        Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("outcome", outcome.wireValue());
+        if (statusClass != null) {
+            body.put("status_class", statusClass.wireValue());
+        }
+        return objectMapper.writeValueAsString(body);
+    }
+
+    /** Package-visible so tests can stub the hosted outcome response. */
+    HttpResponse<String> sendOutcomeRequest(String auditRowId, Outcome outcome, StatusClass statusClass)
+            throws AgentAdmitException {
+        try {
+            String base = config.getApiUrl();
+            String url = (base != null && base.endsWith("/"))
+                ? base.substring(0, base.length() - 1)
+                : base;
+            String body = buildOutcomeBody(outcome, statusClass);
+            HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(url + "/api/v1/audit/" + auditRowId + "/outcome"))
+                .header("Authorization", "Bearer " + config.getApiKey())
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(body))
+                .timeout(Duration.ofSeconds(5))
+                .build();
+            return httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        } catch (Exception e) {
+            logger.error("AgentAdmit outcome report network error: {}", e.getMessage());
+            throw new AgentAdmitException("Outcome report failed: " + e.getMessage(), 502);
         }
     }
 
@@ -548,6 +669,9 @@ public class IntrospectionClient {
      *                     the hosted service CONSUMED to allow this exact call
      *                     (null when this call rode the standing grant alone).
      *                     Strictly parsed; see {@link ActionConfirmation.Consumed}.
+     * @param auditRowId   hosted audit row id for this successful verify call,
+     *                     used with {@link #reportOutcome(String, Outcome, StatusClass)}
+     *                     (null when the server predates outcome reporting).
      */
     public record IntrospectionResult(
         String userId,
@@ -563,7 +687,8 @@ public class IntrospectionClient {
         Presence presence,
         String purpose,
         String userIntent,
-        ActionConfirmation.Consumed actionConfirmation
+        ActionConfirmation.Consumed actionConfirmation,
+        String auditRowId
     ) {
         /**
          * Backward-compatible constructor for results without a consumed
@@ -588,7 +713,35 @@ public class IntrospectionClient {
                 String sub, String role, String appId, String jti, long exp,
                 Map<String, Object> consent, Presence presence, String purpose, String userIntent) {
             this(userId, connectionId, scopes, agentLabel, sub, role, appId, jti, exp,
-                consent, presence, purpose, userIntent, null);
+                consent, presence, purpose, userIntent, null, null);
+        }
+
+        /**
+         * Backward-compatible constructor for results with consumed
+         * confirmation but without an audit row id.
+         *
+         * @param userId       the end user's identifier
+         * @param connectionId the AgentAdmit connection identifier
+         * @param scopes       list of granted scope strings
+         * @param agentLabel   human-readable agent display name
+         * @param sub          token subject
+         * @param role         the user's role granted on the connection
+         * @param appId        the AgentAdmit application identifier
+         * @param jti          unique JWT ID of the access token
+         * @param exp          token expiry as a Unix timestamp (0 if absent)
+         * @param consent      Consent Ledger verdict (null if absent)
+         * @param presence     human-presence fact (null if absent or malformed)
+         * @param purpose      declared purpose (null if absent)
+         * @param userIntent   user-declared intent (null if absent)
+         * @param actionConfirmation consumed confirmation (null if absent)
+         */
+        public IntrospectionResult(
+                String userId, String connectionId, List<String> scopes, String agentLabel,
+                String sub, String role, String appId, String jti, long exp,
+                Map<String, Object> consent, Presence presence, String purpose, String userIntent,
+                ActionConfirmation.Consumed actionConfirmation) {
+            this(userId, connectionId, scopes, agentLabel, sub, role, appId, jti, exp,
+                consent, presence, purpose, userIntent, actionConfirmation, null);
         }
 
         /**
@@ -638,4 +791,108 @@ public class IntrospectionClient {
             return presence != null && Boolean.TRUE.equals(presence.verified());
         }
     }
+
+    /** App-observed execution outcome for a verified call. */
+    public enum Outcome {
+        /** The app observed a successful downstream response. */
+        EXECUTED("executed"),
+        /** The app observed a failed downstream response. */
+        FAILED("failed"),
+        /** Explicit caller-reported unknown result; never used by automatic mapping. */
+        UNKNOWN("unknown");
+
+        private final String wireValue;
+
+        Outcome(String wireValue) {
+            this.wireValue = wireValue;
+        }
+
+        /**
+         * Get the hosted API wire value.
+         *
+         * @return the hosted API wire value
+         */
+        public String wireValue() {
+            return wireValue;
+        }
+
+        static Outcome fromWireValue(String value) {
+            for (Outcome outcome : values()) {
+                if (outcome.wireValue.equals(value)) return outcome;
+            }
+            return null;
+        }
+    }
+
+    /** Optional HTTP response status class reported with an outcome. */
+    public enum StatusClass {
+        /** 1xx informational response class. */
+        INFORMATIONAL("1xx"),
+        /** 2xx success response class. */
+        SUCCESS("2xx"),
+        /** 3xx redirection response class. */
+        REDIRECTION("3xx"),
+        /** 4xx client error response class. */
+        CLIENT_ERROR("4xx"),
+        /** 5xx server error response class. */
+        SERVER_ERROR("5xx");
+
+        private final String wireValue;
+
+        StatusClass(String wireValue) {
+            this.wireValue = wireValue;
+        }
+
+        /**
+         * Get the hosted API wire value.
+         *
+         * @return the hosted API wire value
+         */
+        public String wireValue() {
+            return wireValue;
+        }
+
+        static StatusClass fromWireValue(String value) {
+            for (StatusClass statusClass : values()) {
+                if (statusClass.wireValue.equals(value)) return statusClass;
+            }
+            return null;
+        }
+
+        /**
+         * Convert an HTTP status code to its class.
+         *
+         * @param status HTTP status code
+         * @return the status class, or {@code null} outside 100-599
+         */
+        public static StatusClass fromStatusCode(int status) {
+            return switch (status / 100) {
+                case 1 -> INFORMATIONAL;
+                case 2 -> SUCCESS;
+                case 3 -> REDIRECTION;
+                case 4 -> CLIENT_ERROR;
+                case 5 -> SERVER_ERROR;
+                default -> null;
+            };
+        }
+    }
+
+    /**
+     * Hosted outcome row summary.
+     *
+     * @param outcomeRowId id of the appended outcome row
+     * @param outcome      outcome recorded on that row
+     * @param statusClass  reported HTTP status class, or {@code null} when omitted
+     * @param chainSeq     audit-chain sequence, or {@code null} when unavailable
+     * @param rowHash      audit row hash, or {@code null} when unavailable
+     * @param reportedAt   timestamp of the outcome row, or {@code null} when unavailable
+     */
+    public record OutcomeReport(
+        String outcomeRowId,
+        Outcome outcome,
+        StatusClass statusClass,
+        Long chainSeq,
+        String rowHash,
+        String reportedAt
+    ) {}
 }
