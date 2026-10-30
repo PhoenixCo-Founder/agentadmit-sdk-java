@@ -1,0 +1,65 @@
+# Reproduce the Central bundle on the GitHub runner WITHOUT publishing.
+# Uses dummy credentials so the upload step 401s after the bundle zip exists,
+# then lists the staging directory and the zip. Optional plugin version
+# override to test a central-publishing-maven-plugin upgrade before changing pom.xml.
+#
+# Usage: gh workflow run central-bundle-dryrun.yml -f pluginVersion=0.12.0
+
+name: Central bundle dry run
+
+on:
+  workflow_dispatch:
+    inputs:
+      pluginVersion:
+        description: 'central-publishing-maven-plugin version to test (blank = pom.xml value)'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  dryrun:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          server-id: central
+          server-username: DUMMY_USER
+          server-password: DUMMY_PASS
+
+      - name: Maven version on this runner
+        run: mvn -version
+
+      - name: Override plugin version (optional)
+        if: ${{ inputs.pluginVersion != '' }}
+        run: |
+          python3 - "$PLUGIN_VERSION" <<'PY'
+          import re, sys
+          v = sys.argv[1]
+          s = open('pom.xml').read()
+          s2 = re.sub(r'(<artifactId>central-publishing-maven-plugin</artifactId>\s*<version>)[^<]+(</version>)', r'\g<1>' + v + r'\g<2>', s)
+          assert s2 != s, 'plugin version not replaced'
+          open('pom.xml', 'w').write(s2)
+          PY
+          grep -n -A1 'central-publishing-maven-plugin' pom.xml
+        env:
+          PLUGIN_VERSION: ${{ inputs.pluginVersion }}
+
+      - name: Build bundle (upload is expected to fail with 401)
+        run: mvn --batch-mode deploy -DskipTests -Dgpg.skip || true
+        env:
+          DUMMY_USER: dummy
+          DUMMY_PASS: dummy
+
+      - name: List staging directory and bundle
+        run: |
+          echo "--- target/central-staging ---"
+          find target/central-staging -type f | sort
+          echo "--- central-bundle.zip ---"
+          unzip -l target/central-publishing/central-bundle.zip
