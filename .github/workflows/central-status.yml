@@ -1,0 +1,38 @@
+# Read the validation result of a Maven Central (Sonatype Central Portal)
+# deployment. The Portal UI needs an interactive login; this prints the same
+# `errors` block the UI shows, using the repo's CENTRAL_USERNAME/PASSWORD
+# user token. Output contains no credentials.
+#
+# Usage: gh workflow run central-status.yml -f deploymentId=<uuid>
+
+name: Central deployment status
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploymentId:
+        description: 'Sonatype Central deploymentId from a publish run log'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  status:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Query Central Portal publisher status
+        env:
+          CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
+          CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
+          DEPLOYMENT_ID: ${{ inputs.deploymentId }}
+        run: |
+          set -eu
+          TOKEN="$(printf '%s:%s' "$CENTRAL_USERNAME" "$CENTRAL_PASSWORD" | base64 -w0)"
+          curl -sS -X POST \
+            -H "Authorization: Bearer $TOKEN" \
+            "https://central.sonatype.com/api/v1/publisher/status?id=$DEPLOYMENT_ID" \
+            -o status.json -w 'HTTP %{http_code}\n'
+          echo "--- status.json ---"
+          python3 -m json.tool status.json
