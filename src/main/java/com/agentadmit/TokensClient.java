@@ -72,23 +72,48 @@ public class TokensClient {
      * @return the exchange response (access_token, scopes, connection_id, …)
      * @throws AgentAdmitException if the exchange fails
      */
-    @SuppressWarnings("unchecked")
     public Map<String, Object> exchange(String connectionToken, String agentLabel, String agentId)
             throws AgentAdmitException {
+        return exchange(connectionToken, agentLabel, agentId, null, null);
+    }
+
+    /**
+     * Exchange a single-use connection token for an access token, passing
+     * along what the agent says it runs on.
+     * Calls POST /api/v1/exchange — unauthenticated by design: the connection
+     * token itself is the credential, so the operator API key is NOT sent.
+     *
+     * <p>{@code agentPlatform} and {@code agentModel} are reported by the
+     * agent and unverified. The hosted service records them and never lets
+     * them decide the outcome of the exchange.
+     *
+     * @param connectionToken the ag_ct_… connection token
+     * @param agentLabel human-readable agent name (may be null)
+     * @param agentId agent identifier (may be null)
+     * @param agentPlatform the agent app or runtime the agent says it runs in (may be null)
+     * @param agentModel the AI model the agent says it runs on (may be null;
+     *                   a null version is omitted)
+     * @return the exchange response (access_token, scopes, connection_id, …)
+     * @throws AgentAdmitException if the exchange fails
+     */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> exchange(String connectionToken, String agentLabel, String agentId,
+            String agentPlatform, AgentReported.Model agentModel) throws AgentAdmitException {
         String url = config.getApiUrl().replaceAll("/$", "") + "/api/v1/exchange";
         Map<String, Object> body = new HashMap<>();
         body.put("token", connectionToken);
         if (agentLabel != null) body.put("agent_label", agentLabel);
         if (agentId != null) body.put("agent_id", agentId);
+        if (agentPlatform != null) body.put("agent_platform", agentPlatform);
+        if (agentModel != null && agentModel.id() != null) {
+            Map<String, Object> model = new HashMap<>();
+            model.put("id", agentModel.id());
+            if (agentModel.version() != null) model.put("version", agentModel.version());
+            body.put("agent_model", model);
+        }
         try {
             // No Authorization header — the connection token is the credential.
-            HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(url))
-                .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)))
-                .timeout(Duration.ofSeconds(10))
-                .build();
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> response = sendExchange(url, objectMapper.writeValueAsString(body));
             if (response.statusCode() >= 400) {
                 throw new AgentAdmitException("Token exchange failed", response.statusCode());
             }
@@ -135,6 +160,20 @@ public class TokensClient {
             logger.error("AgentAdmit {} failed: {}", op, e.getMessage());
             throw new AgentAdmitException(op + " failed", 502);
         }
+    }
+
+    /**
+     * The unauthenticated exchange POST. Package-visible so tests can capture
+     * the outbound body. Sends no Authorization header and no app id.
+     */
+    HttpResponse<String> sendExchange(String url, String jsonBody) throws Exception {
+        HttpRequest request = HttpRequest.newBuilder()
+            .uri(URI.create(url))
+            .header("Content-Type", "application/json")
+            .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
+            .timeout(Duration.ofSeconds(10))
+            .build();
+        return httpClient.send(request, HttpResponse.BodyHandlers.ofString());
     }
 
     /** Package-visible so tests can stub the hosted-service response and capture the outbound body. */
