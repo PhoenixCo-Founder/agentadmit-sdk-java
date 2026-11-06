@@ -208,6 +208,8 @@ DesignatedAgent fromRequest = (DesignatedAgent) request.getAttribute("agentadmit
 
 Use `designatedAgent().name()` when you tell a user which of their connections did something: it is the name they chose. `agentId()` and `model().modelId()` are the ids of your list entries, or `null` when the user typed a name that is not on your list.
 
+If your code redeems connection tokens with `TokensClient.exchange`, the five-argument form takes `agentPlatform` and an `AgentReported.Model` to send along what the agent says it runs on (since 1.14.1).
+
 Do not branch authorization on either field. They are records for people reviewing a connection, not a gate. Scope checks, connection status, and consent verdicts remain the only decision inputs. To act on a designation, use the hosted revoke API (`designated_agent_id`, `designated_model_id`) or your list's block setting in the dashboard.
 
 ## App-Attested Presence
