@@ -237,6 +237,12 @@ public class CallerConsentFilter implements Filter {
             httpReq.setAttribute("agentadmit.connectionId", result.connectionId());
             httpReq.setAttribute("agentadmit.agentLabel", result.agentLabel());
             httpReq.setAttribute("agentadmit.presence", result.presence());
+            if (result.designatedAgent() != null) {
+                httpReq.setAttribute("agentadmit.designatedAgent", result.designatedAgent());
+            }
+            if (result.agentReported() != null) {
+                httpReq.setAttribute("agentadmit.agentReported", result.agentReported());
+            }
             httpReq.setAttribute("agentadmit.consent", consent);
             chain.doFilter(request, response);
             return;

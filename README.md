@@ -187,6 +187,29 @@ String userIntent = result.userIntent(); // null when the grant carries no user-
 
 `result.userIntent()` is `null` when the grant has no user-declared intent or the server predates the feature. Surface it in audit views, admin panels, and connection-review UIs — do not branch authorization on it.
 
+## Agent Designation
+
+On AgentAdmit's consent page the user says which agent app a connection is for and, optionally, which AI model family it mainly uses. That is the user's statement, recorded with the grant; it is not a verified identity of the agent. Separately, an agent may report its own platform and model when it redeems the connection token; that is unverified too.
+
+The verify response reports both on every introspection. The SDK surfaces them on the result as `designatedAgent()` and `agentReported()` (`null` when the connection carries none), and the filters set the request attributes `agentadmit.designatedAgent` and `agentadmit.agentReported` when they are present:
+
+```java
+IntrospectionClient.IntrospectionResult result = introspectionClient.verify(token);
+
+DesignatedAgent named = result.designatedAgent();   // agentId, name, source "user_declared", model
+AgentReported reported = result.agentReported();    // platform, model (id, version)
+
+String chosenName = named != null ? named.name() : "(not named)";
+String chosenModel = named != null && named.model() != null ? named.model().name() : "(not named)";
+
+// Inside a controller behind the filter:
+DesignatedAgent fromRequest = (DesignatedAgent) request.getAttribute("agentadmit.designatedAgent");
+```
+
+Use `designatedAgent().name()` when you tell a user which of their connections did something: it is the name they chose. `agentId()` and `model().modelId()` are the ids of your list entries, or `null` when the user typed a name that is not on your list.
+
+Do not branch authorization on either field. They are records for people reviewing a connection, not a gate. Scope checks, connection status, and consent verdicts remain the only decision inputs. To act on a designation, use the hosted revoke API (`designated_agent_id`, `designated_model_id`) or your list's block setting in the dashboard.
+
 ## App-Attested Presence
 
 If your app gates token minting behind its own embedded passkey/WebAuthn ceremony, AgentAdmit never witnesses that ceremony (it is origin-bound), so by default the hosted service reports `presence.verified: false` for those connections. Attest the ceremony fact at issuance to close that gap — AFTER verifying and consuming your own fresh, purpose-bound attestation:

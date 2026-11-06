@@ -275,6 +275,12 @@ public class AgentAdmitFilter implements Filter {
                 if (result.auditRowId() != null) {
                     httpReq.setAttribute("agentadmit.auditRowId", result.auditRowId());
                 }
+                if (result.designatedAgent() != null) {
+                    httpReq.setAttribute("agentadmit.designatedAgent", result.designatedAgent());
+                }
+                if (result.agentReported() != null) {
+                    httpReq.setAttribute("agentadmit.agentReported", result.agentReported());
+                }
 
                 logger.debug("AgentAdmit: validated agent token for user={} scopes={}", 
                     result.userId(), result.scopes());

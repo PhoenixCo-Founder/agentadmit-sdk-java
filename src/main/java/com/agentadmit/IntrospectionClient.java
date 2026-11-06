@@ -243,7 +243,14 @@ public class IntrospectionClient {
                 ActionConfirmation.Consumed actionConfirmation =
                     ActionConfirmation.Consumed.fromVerifyData(data.get("action_confirmation"));
 
-                return new IntrospectionResult(userId, connectionId, scopes, agentLabel, sub, role, appId, jti, exp, consent, presence, purpose, userIntent, actionConfirmation, auditRowId);
+                // Agent designation (1.14.0): what the user said the
+                // connection is for, and what the agent reported about
+                // itself. Review-time records, never an enforcement input,
+                // so a malformed block reads as null, never a rejection.
+                DesignatedAgent designatedAgent = DesignatedAgent.fromVerifyData(data.get("designated_agent"));
+                AgentReported agentReported = AgentReported.fromVerifyData(data.get("agent_reported"));
+
+                return new IntrospectionResult(userId, connectionId, scopes, agentLabel, sub, role, appId, jti, exp, consent, presence, purpose, userIntent, actionConfirmation, auditRowId, designatedAgent, agentReported);
             } catch (AgentAdmitException e) {
                 throw e;
             } catch (Exception e) {
@@ -672,6 +679,16 @@ public class IntrospectionClient {
      * @param auditRowId   hosted audit row id for this successful verify call,
      *                     used with {@link #reportOutcome(String, Outcome, StatusClass)}
      *                     (null when the server predates outcome reporting).
+     * @param designatedAgent agent designation (1.14.0): what the USER said on
+     *                     the consent page about which agent app the connection
+     *                     is for and which AI model family it mainly uses (null
+     *                     if absent or malformed). The user's statement, not a
+     *                     verified identity. Review-time record only, never an
+     *                     enforcement input.
+     * @param agentReported what the AGENT reported about itself when it redeemed
+     *                     the connection token (null if it reported nothing).
+     *                     Unverified. Review-time record only, never an
+     *                     enforcement input.
      */
     public record IntrospectionResult(
         String userId,
@@ -688,8 +705,39 @@ public class IntrospectionClient {
         String purpose,
         String userIntent,
         ActionConfirmation.Consumed actionConfirmation,
-        String auditRowId
+        String auditRowId,
+        DesignatedAgent designatedAgent,
+        AgentReported agentReported
     ) {
+        /**
+         * Backward-compatible constructor for results without an agent
+         * designation (the canonical shape through 1.13).
+         *
+         * @param userId       the end user's identifier
+         * @param connectionId the AgentAdmit connection identifier
+         * @param scopes       list of granted scope strings
+         * @param agentLabel   human-readable agent display name
+         * @param sub          token subject
+         * @param role         the user's role granted on the connection
+         * @param appId        the AgentAdmit application identifier
+         * @param jti          unique JWT ID of the access token
+         * @param exp          token expiry as a Unix timestamp (0 if absent)
+         * @param consent      Consent Ledger verdict (null if absent)
+         * @param presence     human-presence fact (null if absent or malformed)
+         * @param purpose      declared purpose (null if absent)
+         * @param userIntent   user-declared intent (null if absent)
+         * @param actionConfirmation consumed confirmation (null if absent)
+         * @param auditRowId   hosted audit row id (null if absent)
+         */
+        public IntrospectionResult(
+                String userId, String connectionId, List<String> scopes, String agentLabel,
+                String sub, String role, String appId, String jti, long exp,
+                Map<String, Object> consent, Presence presence, String purpose, String userIntent,
+                ActionConfirmation.Consumed actionConfirmation, String auditRowId) {
+            this(userId, connectionId, scopes, agentLabel, sub, role, appId, jti, exp,
+                consent, presence, purpose, userIntent, actionConfirmation, auditRowId, null, null);
+        }
+
         /**
          * Backward-compatible constructor for results without a consumed
          * confirm-each-time confirmation.
@@ -713,7 +761,7 @@ public class IntrospectionClient {
                 String sub, String role, String appId, String jti, long exp,
                 Map<String, Object> consent, Presence presence, String purpose, String userIntent) {
             this(userId, connectionId, scopes, agentLabel, sub, role, appId, jti, exp,
-                consent, presence, purpose, userIntent, null, null);
+                consent, presence, purpose, userIntent, null, null, null, null);
         }
 
         /**
@@ -741,7 +789,7 @@ public class IntrospectionClient {
                 Map<String, Object> consent, Presence presence, String purpose, String userIntent,
                 ActionConfirmation.Consumed actionConfirmation) {
             this(userId, connectionId, scopes, agentLabel, sub, role, appId, jti, exp,
-                consent, presence, purpose, userIntent, actionConfirmation, null);
+                consent, presence, purpose, userIntent, actionConfirmation, null, null, null);
         }
 
         /**
