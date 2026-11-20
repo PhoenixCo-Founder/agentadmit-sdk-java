@@ -302,4 +302,40 @@ public class AgentAdmitException extends RuntimeException {
          */
         public long getReset() { return reset; }
     }
+
+    // -------------------------------------------------------------------------
+    // ApiError — nested static class
+    // -------------------------------------------------------------------------
+
+    /**
+     * 1.15.0: an HTTP error answer from a hosted management API call that
+     * names the hosted {@code error} code, such as
+     * {@link TokensClient#createOwnerLink(String, String)}. It is an
+     * {@link AgentAdmitException}, so existing catch blocks keep working;
+     * {@link #getStatusCode()} is the hosted HTTP status.
+     */
+    public static class ApiError extends AgentAdmitException {
+        /** The hosted {@code error} code, or {@code null} when the body carried none. */
+        private final String errorCode;
+
+        /**
+         * Create a new ApiError.
+         *
+         * @param message    human-readable description (never carries the response body)
+         * @param statusCode the hosted HTTP status
+         * @param errorCode  the hosted {@code error} code, or {@code null}
+         */
+        public ApiError(String message, int statusCode, String errorCode) {
+            super(message, statusCode);
+            this.errorCode = errorCode;
+        }
+
+        /**
+         * Get the hosted {@code error} code (for example {@code not_found},
+         * {@code already_consumed}, {@code session_expired}).
+         *
+         * @return the error code, or {@code null} when the body carried none
+         */
+        public String getErrorCode() { return errorCode; }
+    }
 }

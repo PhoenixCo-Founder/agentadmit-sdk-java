@@ -144,6 +144,100 @@ public class TokensClient {
         return post(url, body, "revoke");
     }
 
+    /**
+     * Open a pending confirm-each-time request for the app's own signed-in
+     * user (1.15.0). Calls POST /api/v1/action-sessions/{id}/owner-link with
+     * the app's API key and body {@code {"app_user_id": appUserId}}.
+     *
+     * <p>Use it when a {@code confirmation_required} refusal says
+     * {@code enrollment_required: true}: the user has no passkey on file for
+     * the app yet, so the link the agent holds cannot be used. The user
+     * creates a passkey and confirms on the page the returned link opens; on a
+     * computer that page can show a QR code to continue on the user's phone.
+     *
+     * <p>Two rules:
+     * <ul>
+     *   <li>Call it only from a route your signed-in human uses, passing that
+     *       user's own id. The hosted service answers 404 when the session
+     *       belongs to a different user than the one named.</li>
+     *   <li>Do not return {@link OwnerLink#ownerSessionUrl()} to an agent.
+     *       Send it to the signed-in user's browser only.</li>
+     * </ul>
+     *
+     * <p>It is not wired into {@link AgentAdmitFilter} or any route. This
+     * call logs the path and the status only, never the response. Calling it
+     * again for the same session is safe: a new link replaces the previous one.
+     *
+     * @param actionSessionId the {@code asess_} id from the refusal (at least 20 characters)
+     * @param appUserId       your signed-in user's id (1 to 255 characters)
+     * @return the owner link
+     * @throws IllegalArgumentException if an argument is invalid (before any request is made)
+     * @throws AgentAdmitException.ApiError on a hosted HTTP error (401 {@code invalid_api_key},
+     *         403 {@code api_key_not_app_linked}, 404 {@code not_found}, 409 {@code already_consumed}
+     *         or {@code already_verified}, 410 {@code session_expired}, 429, 5xx); not retried
+     * @throws AgentAdmitException with status 502 on a network failure or a malformed 2xx body
+     */
+    public OwnerLink createOwnerLink(String actionSessionId, String appUserId) throws AgentAdmitException {
+        if (actionSessionId == null || !actionSessionId.startsWith("asess_") || actionSessionId.length() < 20) {
+            throw new IllegalArgumentException(
+                "actionSessionId must be an asess_ id of at least 20 characters");
+        }
+        if (appUserId == null || appUserId.isEmpty() || appUserId.length() > 255) {
+            throw new IllegalArgumentException("appUserId must be 1 to 255 characters");
+        }
+        String path = "/api/v1/action-sessions/"
+            + java.net.URLEncoder.encode(actionSessionId, java.nio.charset.StandardCharsets.UTF_8).replace("+", "%20")
+            + "/owner-link";
+        String url = config.getApiUrl().replaceAll("/$", "") + path;
+        Map<String, Object> body = new HashMap<>();
+        body.put("app_user_id", appUserId);
+
+        HttpResponse<String> response;
+        try {
+            response = sendPost(url, objectMapper.writeValueAsString(body));
+        } catch (Exception e) {
+            logger.error("AgentAdmit createOwnerLink POST {} failed", path);
+            throw new AgentAdmitException("createOwnerLink failed", 502);
+        }
+        int status = response.statusCode();
+        if (status >= 400) {
+            logger.error("AgentAdmit createOwnerLink POST {} returned {}", path, status);
+            String code = null;
+            try {
+                if (objectMapper.readValue(response.body(), Map.class).get("error") instanceof String c) {
+                    code = c;
+                }
+            } catch (Exception ignored) {
+                // A non-JSON error body leaves the code unknown.
+            }
+            throw new AgentAdmitException.ApiError(
+                "createOwnerLink failed: " + status + (code != null ? " " + code : ""), status, code);
+        }
+        Map<?, ?> data;
+        try {
+            data = objectMapper.readValue(response.body(), Map.class);
+        } catch (Exception e) {
+            data = null;
+        }
+        // The result promises all four fields (the same rule in all six SDKs):
+        // a body without any of them is malformed, never a partial result.
+        if (data == null
+                || !(data.get("owner_session_url") instanceof String ownerSessionUrl)
+                || !(data.get("enrollment_required") instanceof Boolean enrollmentRequired)
+                || !(data.get("action_session_id") instanceof String linkSessionId)
+                || !(data.get("expires_at") instanceof String linkExpiresAt)) {
+            logger.error("AgentAdmit createOwnerLink POST {} returned {} with a malformed body", path, status);
+            throw new AgentAdmitException("createOwnerLink returned a malformed response", 502);
+        }
+        return new OwnerLink(
+            linkSessionId,
+            ownerSessionUrl,
+            enrollmentRequired,
+            // The reason belongs to an enrollment; it is kept only then.
+            enrollmentRequired && data.get("enrollment_reason") instanceof String r ? r : null,
+            linkExpiresAt);
+    }
+
     @SuppressWarnings("unchecked")
     private Map<String, Object> post(String url, Map<String, Object> body, String op)
             throws AgentAdmitException {

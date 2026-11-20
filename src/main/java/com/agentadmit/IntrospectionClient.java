@@ -35,6 +35,17 @@ public class IntrospectionClient {
         "This action requires a fresh human confirmation. Give the confirmation link to the user, "
         + "then retry with the X-AgentAdmit-Action-Attestation header.";
 
+    /**
+     * Description for a {@code confirmation_required} refusal whose block
+     * states {@code enrollment_required: true} (1.15.0). It replaces the
+     * hosted description and the canonical one: the user has no passkey on
+     * file for the app yet, so the link alone cannot be used.
+     */
+    static final String CONFIRMATION_ENROLLMENT_REQUIRED_DESCRIPTION =
+        "This action requires a fresh human confirmation, and this user has no passkey on file for the app yet, "
+        + "so the confirmation link alone cannot be used. Ask the user to open the request from inside the app. "
+        + "After they confirm, retry with the X-AgentAdmit-Action-Attestation header.";
+
     /** Fallback {@code error_description} for a {@code confirmation_declined} refusal. */
     static final String CONFIRMATION_DECLINED_DESCRIPTION =
         "The user declined this action on the hosted confirmation page. "
@@ -421,9 +432,12 @@ public class IntrospectionClient {
                 // ceremony through so the agent can hand the link to the
                 // human; nothing else from the wire.
                 body.put("error", "confirmation_required");
-                message = data.get("error_description") instanceof String d ? d : CONFIRMATION_REQUIRED_DESCRIPTION;
-                body.put("error_description", message);
                 confirmation = ActionConfirmation.fromVerifyData(data.get("confirmation"));
+                message = data.get("error_description") instanceof String d ? d : CONFIRMATION_REQUIRED_DESCRIPTION;
+                if (confirmation != null && Boolean.TRUE.equals(confirmation.enrollmentRequired())) {
+                    message = CONFIRMATION_ENROLLMENT_REQUIRED_DESCRIPTION;
+                }
+                body.put("error_description", message);
                 if (confirmation != null) body.put("confirmation", confirmation.toWireMap());
                 if (data.get("attestation_status") instanceof String as) {
                     attestationStatus = as;
