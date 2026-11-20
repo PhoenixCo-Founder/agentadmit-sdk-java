@@ -31,6 +31,14 @@ import java.util.Map;
  * @param endpoint         request path the confirmation is bound to, or {@code null}
  * @param requestDigest    {@code sha256:<hex>} of the request body, or {@code null}
  * @param summary          plain-language description shown to the human, or {@code null}
+ * @param enrollmentRequired 1.15.0: {@code Boolean.TRUE} when this user has no
+ *                         passkey on file for the app yet, so the link alone
+ *                         cannot be used and the app has to open the request
+ *                         for its signed-in user
+ *                         ({@link TokensClient#createOwnerLink(String, String)});
+ *                         {@code Boolean.FALSE} when a passkey is on file;
+ *                         {@code null} when the hosted service did not state it
+ *                         (anything other than a JSON boolean reads as {@code null})
  */
 public record ActionConfirmation(
     String actionSessionId,
@@ -40,8 +48,28 @@ public record ActionConfirmation(
     String method,
     String endpoint,
     String requestDigest,
-    String summary
+    String summary,
+    Boolean enrollmentRequired
 ) {
+
+    /**
+     * Backward-compatible constructor with the 1.11.0 argument list;
+     * {@code enrollmentRequired} is {@code null} (not stated).
+     *
+     * @param actionSessionId  single-use id the agent presents on its retry
+     * @param actionSessionUrl hosted confirmation page for the human
+     * @param expiresAt        ISO-8601 expiry of the staged ceremony
+     * @param scope            the confirm-each-time scope this call exercises
+     * @param method           HTTP method the confirmation is bound to, or {@code null}
+     * @param endpoint         request path the confirmation is bound to, or {@code null}
+     * @param requestDigest    {@code sha256:<hex>} of the request body, or {@code null}
+     * @param summary          plain-language description shown to the human, or {@code null}
+     */
+    public ActionConfirmation(String actionSessionId, String actionSessionUrl, String expiresAt,
+            String scope, String method, String endpoint, String requestDigest, String summary) {
+        this(actionSessionId, actionSessionUrl, expiresAt, scope, method, endpoint, requestDigest,
+            summary, null);
+    }
 
     /**
      * Strictly typed copy of the wire {@code confirmation} block.
@@ -74,7 +102,9 @@ public record ActionConfirmation(
             map.get("method") instanceof String s ? s : null,
             map.get("endpoint") instanceof String s ? s : null,
             map.get("request_digest") instanceof String s ? s : null,
-            map.get("summary") instanceof String s ? s : null
+            map.get("summary") instanceof String s ? s : null,
+            // Strict: only a JSON boolean is kept, never coerced.
+            map.get("enrollment_required") instanceof Boolean b ? b : null
         );
     }
 
@@ -89,6 +119,8 @@ public record ActionConfirmation(
         Map<String, Object> wire = new LinkedHashMap<>();
         wire.put("action_session_id", actionSessionId);
         wire.put("action_session_url", actionSessionUrl);
+        // Left out when not stated, exactly as the hosted service does.
+        if (enrollmentRequired != null) wire.put("enrollment_required", enrollmentRequired);
         wire.put("expires_at", expiresAt);
         wire.put("scope", scope);
         wire.put("method", method);
