@@ -219,18 +219,23 @@ public class TokensClient {
         } catch (Exception e) {
             data = null;
         }
+        // The result promises all four fields (the same rule in all six SDKs):
+        // a body without any of them is malformed, never a partial result.
         if (data == null
                 || !(data.get("owner_session_url") instanceof String ownerSessionUrl)
-                || !(data.get("enrollment_required") instanceof Boolean enrollmentRequired)) {
+                || !(data.get("enrollment_required") instanceof Boolean enrollmentRequired)
+                || !(data.get("action_session_id") instanceof String linkSessionId)
+                || !(data.get("expires_at") instanceof String linkExpiresAt)) {
             logger.error("AgentAdmit createOwnerLink POST {} returned {} with a malformed body", path, status);
             throw new AgentAdmitException("createOwnerLink returned a malformed response", 502);
         }
         return new OwnerLink(
-            data.get("action_session_id") instanceof String id ? id : null,
+            linkSessionId,
             ownerSessionUrl,
             enrollmentRequired,
-            data.get("enrollment_reason") instanceof String r ? r : null,
-            data.get("expires_at") instanceof String e ? e : null);
+            // The reason belongs to an enrollment; it is kept only then.
+            enrollmentRequired && data.get("enrollment_reason") instanceof String r ? r : null,
+            linkExpiresAt);
     }
 
     @SuppressWarnings("unchecked")

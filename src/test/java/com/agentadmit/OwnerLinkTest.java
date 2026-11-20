@@ -350,6 +350,10 @@ class OwnerLinkTest {
             "{\"owner_session_url\":\"https://agentadmit.com/o#t=secret\",\"enrollment_required\":\"true\"}",
             "not json https://agentadmit.com/o#t=secret",
             "[]",
+            // Same rule as the other five SDKs: the id and the expiry are required too.
+            "{\"owner_session_url\":\"https://agentadmit.com/o#t=secret\",\"enrollment_required\":true,\"expires_at\":\"e\"}",
+            "{\"action_session_id\":\"x\",\"owner_session_url\":\"https://agentadmit.com/o#t=secret\",\"enrollment_required\":true}",
+            "{\"action_session_id\":7,\"owner_session_url\":\"https://agentadmit.com/o#t=secret\",\"enrollment_required\":false,\"expires_at\":\"e\"}",
         };
         for (String body : bodies) {
             AgentAdmitException e = assertThrows(AgentAdmitException.class,
@@ -360,6 +364,17 @@ class OwnerLinkTest {
     }
 
     @Test
+    void reasonIsKeptOnlyWithAnEnrollment() {
+        // A stray enrollment_reason on a "passkey already on file" answer is not copied through.
+        OwnerLink link = new CapturingTokensClient(200, "{\"action_session_id\":\"" + SESSION
+            + "\",\"owner_session_url\":\"https://agentadmit.com/confirm/action/x\",\"enrollment_required\":false,"
+            + "\"enrollment_reason\":\"no_passkey\",\"expires_at\":\"2026-11-20T18:30:00.000Z\"}")
+            .createOwnerLink(SESSION, "user_42");
+        assertFalse(link.enrollmentRequired());
+        assertNull(link.enrollmentReason());
+    }
+
+    @Test
     void neverLogsTheOwnerSessionUrl() {
         Logger logger = (Logger) LoggerFactory.getLogger(TokensClient.class);
         ListAppender<ILoggingEvent> appender = new ListAppender<>();
@@ -367,7 +382,8 @@ class OwnerLinkTest {
         logger.addAppender(appender);
         try {
             String url = "https://agentadmit.com/confirm/owner/asess_x#t=secret_fragment";
-            new CapturingTokensClient(201, "{\"owner_session_url\":\"" + url + "\",\"enrollment_required\":true}")
+            new CapturingTokensClient(201, "{\"action_session_id\":\"" + SESSION + "\",\"owner_session_url\":\"" + url
+                    + "\",\"enrollment_required\":true,\"expires_at\":\"2026-11-20T18:30:00.000Z\"}")
                 .createOwnerLink(SESSION, "user_42");
             assertThrows(AgentAdmitException.class, () -> new CapturingTokensClient(201,
                 "{\"owner_session_url\":\"" + url + "\"}").createOwnerLink(SESSION, "user_42"));
